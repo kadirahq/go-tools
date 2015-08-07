@@ -213,7 +213,7 @@ func New(options *Options) (sf File, err error) {
 	// validate metadata file
 	if meta.Directory != options.Directory ||
 		meta.FilePrefix != options.FilePrefix ||
-		meta.SegmentSize != options.SegmentSize ||
+		meta.SegmentSize < 0 ||
 		meta.SegmentFiles < 0 ||
 		meta.DataSize < 0 ||
 		meta.DataSize > meta.SegmentFiles*meta.SegmentSize {
@@ -239,6 +239,11 @@ func New(options *Options) (sf File, err error) {
 	if err != nil {
 		Logger.Trace(err)
 		return nil, err
+	}
+
+	if !options.ReadOnly {
+		// initial pre-allocation
+		go f.preallocateIfNeeded()
 	}
 
 	return f, nil
@@ -472,7 +477,7 @@ func (f *file) shouldAllocate(sz int64) (do bool) {
 
 // preallocateIfNeeded pre allocates new segment files if free space
 // goes below the threshold (AllocThreshold percentage of SegmentSize).
-func (f *file) preallocateIfNeeded(sz int64) {
+func (f *file) preallocateIfNeeded() {
 	meta := f.meta
 	thresh := meta.SegmentSize * AllocThreshold / 100
 
