@@ -21,6 +21,7 @@ func TNewOptions(t *testing.T, o *Options) {
 		t.Fatal(err)
 	}
 
+	// run pre-alloc go routines
 	runtime.Gosched()
 
 	err = sf.Close()
@@ -44,12 +45,18 @@ func TestNewOptionsDefault(t *testing.T) {
 	TNewOptions(t, &Options{Directory: TmpDir})
 }
 
-func TestNewOptionsAllOptions(t *testing.T) {
-	TNewOptions(t, &Options{
-		Directory:   TmpDir,
-		FilePrefix:  "test_",
-		SegmentSize: 5 * 1024 * 1024,
-		MemoryMap:   true,
-		ReadOnly:    false,
-	})
+func TestNewOptionsFilePrefix(t *testing.T) {
+	TNewOptions(t, &Options{Directory: TmpDir, FilePrefix: "test_"})
+}
+
+func TestNewOptionsReadOnly(t *testing.T) {
+	TNewOptions(t, &Options{Directory: TmpDir, ReadOnly: true})
+}
+
+func TestNewOptionsSegSize(t *testing.T) {
+	TNewOptions(t, &Options{Directory: TmpDir, SegmentSize: 5 * 1024 * 1024})
+}
+
+func TestNewOptionsMemMap(t *testing.T) {
+	TNewOptions(t, &Options{Directory: TmpDir, MemoryMap: true})
 }
