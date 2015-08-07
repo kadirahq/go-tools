@@ -12,11 +12,11 @@ import (
 )
 
 const (
+	// DirectoryPerm is the permission set for new directories
+	DirectoryPerm = 0755
+
 	// FileMode used when opening files for memory mapping
 	FileMode = os.O_CREATE | os.O_RDWR
-
-	// DirPerm is the permission values set when creating new directories
-	DirPerm = 0755
 
 	// FilePerm is the permissions used when creating new files
 	FilePerm = 0644
@@ -27,7 +27,8 @@ const (
 	// FileFlag is the memory map flag parameter
 	FileFlag = syscall.MAP_SHARED
 
-	// ChunkSize is the number of bytes to write at a time
+	// ChunkSize is the number of bytes to write at a time.
+	// When creating new files, create it in small chunks.
 	ChunkSize = 1024 * 1024 * 10
 )
 
@@ -35,8 +36,14 @@ var (
 	// ErrWrite is returned when bytes written not equal to data size
 	ErrWrite = errors.New("bytes written != data size")
 
+	// ErrOptions is returned when options have missing or invalid fields.
+	ErrOptions = errors.New("invalid or missing options")
+
+	// ErrFileDir is returned when file at path is a directory
+	ErrFileDir = errors.New("directory at target path")
+
 	// ChunkBytes is a ChunkSize size slice of zeroes
-	ChunkBytes = make([]byte, ChunkSize, ChunkSize)
+	ChunkBytes = make([]byte, ChunkSize)
 
 	// Logger logs stuff
 	Logger = logger.New("MMAP")
@@ -44,27 +51,93 @@ var (
 
 // Options has parameters required for creating an `Index`
 type Options struct {
-	Path string // memory map file path
-	Size int64  // minimum size of the mmap file
+	// memory map file path
+	// this field if required
+	Path string
+
+	// minimum size of the mmap file
+	// if not provided, file size will be used
+	Size int64
+
+	// TODO support mapping only a part of a file
+	// offset to start the memory map from
+	// Offset int64
 }
 
-// Map contains a memory map to a file
-// TODO: mapping only a part of the file (consider page size)
-type Map struct {
-	opts *Options      // options
-	data []byte        // mapped data
-	size int64         // map size
-	file *os.File      // map file
-	lock bool          // whether the map is locked or not
-	mutx *sync.RWMutex // read/write mutex
-	roff int64         // io.Reader read offset
-	woff int64         // io.Reader write offset
+// File is similar to os.File but all reads/writes are done through
+// memory maps. This can often lead to much faster reads/writes.
+type File interface {
+	io.Reader
+	io.ReaderAt
+	io.Writer
+	io.WriterAt
+
+	// Size returns the size of the memory map
+	Size() (sz int64)
+
+	// Reset sets io.Reader, io.Writer offsets to zero
+	// TODO check whether we need separate reset functions
+	Reset()
+
+	// Grow method grows the file by `size` number of bytes.
+	// Once it's done, the file will be re-mapped with added bytes.
+	Grow(size int64) (err error)
+
+	// Lock loads memory mapped data to the RAM and keeps them in RAM.
+	// If not done, the data will be kept on disk until required.
+	// Locking a memory map can decrease initial page faults.
+	Lock() (err error)
+
+	// Unlock releases memory by not reserving parts of RAM of the file.
+	// The OS may use memory mapped data from the disk when done.
+	Unlock() (err error)
+
+	// Close method unmaps data and closes the file.
+	// If the mmap is locked, it'll be unlocked first.
+	Close() (err error)
 }
 
-// New function creates a memory maps the file in given path
-func New(options *Options) (m *Map, err error) {
+type mfile struct {
+	// options used when creating the memory map
+	options *Options
+
+	// byte slice which contains memory mapped data
+	data []byte
+
+	// current size of the memory mapped data
+	size int64
+
+	// map file handler used when growing the map
+	file *os.File
+
+	// indicates whether the memory map is locked or not
+	lock bool
+
+	// read/write mutex
+	rwmutx *sync.RWMutex
+
+	// growth mutex to control Grow calls
+	grmutx *sync.RWMutex
+
+	// io.Reader read offset
+	roffset int64
+
+	// io.Reader write offset
+	woffset int64
+}
+
+// New creates a File struct with given options.
+// Default values will be used for missing options.
+func New(options *Options) (mf File, err error) {
+	// validate options
+	if options == nil ||
+		options.Path == "" {
+		Logger.Trace(ErrOptions)
+		return nil, ErrOptions
+	}
+
 	dpath := path.Dir(options.Path)
-	err = os.MkdirAll(dpath, DirPerm)
+	err = os.MkdirAll(dpath, DirectoryPerm)
 	if err != nil {
 		Logger.Trace(err)
 		return nil, err
@@ -82,10 +155,18 @@ func New(options *Options) (m *Map, err error) {
 		return nil, err
 	}
 
+	if finfo.IsDir() {
+		Logger.Trace(ErrFileDir)
+		return nil, ErrFileDir
+	}
+
 	size := finfo.Size()
+	if options.Size == 0 {
+		options.Size = size
+	}
 
 	if toGrow := options.Size - size; toGrow > 0 {
-		err = grow(file, toGrow, size)
+		err = growFile(file, toGrow)
 		if err != nil {
 			Logger.Trace(err)
 			return nil, err
@@ -94,101 +175,90 @@ func New(options *Options) (m *Map, err error) {
 		size = options.Size
 	}
 
-	data, err := mmap(file, 0, size)
+	data, err := mmapFile(file, 0, size)
 	if err != nil {
 		Logger.Trace(err)
 		return nil, err
 	}
 
-	m = &Map{
-		opts: options,
-		data: data,
-		size: size,
-		file: file,
-		mutx: &sync.RWMutex{},
+	mf = &mfile{
+		options: options,
+		data:    data,
+		size:    size,
+		file:    file,
+		rwmutx:  &sync.RWMutex{},
+		grmutx:  &sync.RWMutex{},
 	}
 
-	return m, nil
+	return mf, nil
 }
 
-// Size returns the size of the memory map
-func (m *Map) Size() (sz int64) {
-	m.mutx.RLock()
-	defer m.mutx.RUnlock()
-	return m.size
+func (m *mfile) Read(p []byte) (n int, err error) {
+	m.rwmutx.RLock()
+	defer m.rwmutx.RUnlock()
+
+	n, err = m.read(p, m.roffset)
+	if err == nil {
+		m.roffset += int64(n)
+	} else {
+		Logger.Trace(err)
+	}
+
+	return n, err
 }
 
-// ReadAt reads a slice of bytes from the memory map at an offset
-func (m *Map) ReadAt(p []byte, off int64) (n int, err error) {
-	m.mutx.RLock()
-	defer m.mutx.RUnlock()
+func (m *mfile) ReadAt(p []byte, off int64) (n int, err error) {
+	m.rwmutx.RLock()
+	defer m.rwmutx.RUnlock()
 	return m.read(p, off)
 }
 
-// WriteAt writes a slice of bytes to the memory map at an offset
-// automatically grows the memory map when it runs out of space
-func (m *Map) WriteAt(p []byte, off int64) (n int, err error) {
-	m.mutx.Lock()
-	defer m.mutx.Unlock()
+func (m *mfile) Write(p []byte) (n int, err error) {
+	m.rwmutx.Lock()
+	defer m.rwmutx.Unlock()
+
+	n, err = m.write(p, m.woffset)
+	if err == nil {
+		m.woffset += int64(n)
+	} else {
+		Logger.Trace(err)
+	}
+
+	return n, err
+}
+
+func (m *mfile) WriteAt(p []byte, off int64) (n int, err error) {
+	m.rwmutx.Lock()
+	defer m.rwmutx.Unlock()
 	return m.write(p, off)
 }
 
-// Read reads a slice of bytes from the memory map
-func (m *Map) Read(p []byte) (n int, err error) {
-	m.mutx.RLock()
-	defer m.mutx.RUnlock()
-
-	n, err = m.read(p, m.roff)
-	if err == nil {
-		m.roff += int64(n)
-	} else {
-		Logger.Trace(err)
-	}
-
-	return n, err
+func (m *mfile) Size() (sz int64) {
+	m.rwmutx.RLock()
+	defer m.rwmutx.RUnlock()
+	return m.size
 }
 
-// Write writes a slice of bytes to the memory map
-func (m *Map) Write(p []byte) (n int, err error) {
-	m.mutx.Lock()
-	defer m.mutx.Unlock()
+func (m *mfile) Reset() {
+	m.rwmutx.Lock()
+	defer m.rwmutx.Unlock()
 
-	n, err = m.write(p, m.woff)
-	if err == nil {
-		m.woff += int64(n)
-	} else {
-		Logger.Trace(err)
-	}
-
-	return n, err
+	m.roffset = 0
+	m.woffset = 0
 }
 
-// Reset resets io.Reader, io.Writer offsets
-func (m *Map) Reset() {
-	m.mutx.Lock()
-	defer m.mutx.Unlock()
-
-	m.roff = 0
-	m.woff = 0
-}
-
-// Grow method grows the file by `size` number of bytes. Once it's done, the
-// file will be re-mapped with added bytes.
-func (m *Map) Grow(size int64) (err error) {
-	m.mutx.Lock()
-	defer m.mutx.Unlock()
+func (m *mfile) Grow(size int64) (err error) {
+	m.rwmutx.Lock()
+	defer m.rwmutx.Unlock()
 	return m.grow(size)
 }
 
-// Lock method loads memory mapped data to the RAM and keeps them in RAM.
-// If not done, the data will be kept on disk until required.
-// Locking a memory map can decrease initial page faults.
-func (m *Map) Lock() (err error) {
+func (m *mfile) Lock() (err error) {
 	if m.lock {
 		return nil
 	}
 
-	err = mlock(m.data)
+	err = lockData(m.data)
 	if err != nil {
 		Logger.Trace(err)
 		return err
@@ -198,14 +268,12 @@ func (m *Map) Lock() (err error) {
 	return nil
 }
 
-// Unlock method releases memory by not reserving parts of RAM of the file.
-// The operating system may use memory mapped data from the disk when done.
-func (m *Map) Unlock() (err error) {
+func (m *mfile) Unlock() (err error) {
 	if !m.lock {
 		return nil
 	}
 
-	err = munlock(m.data)
+	err = unlockData(m.data)
 	if err != nil {
 		Logger.Trace(err)
 		return err
@@ -215,19 +283,17 @@ func (m *Map) Unlock() (err error) {
 	return nil
 }
 
-// Close method unmaps data and closes the file.
-// If the mmap is locked, it'll be unlocked first.
-func (m *Map) Close() (err error) {
+func (m *mfile) Close() (err error) {
 	err = m.Unlock()
 	if err != nil {
 		Logger.Trace(err)
 		return err
 	}
 
-	m.mutx.Lock()
-	defer m.mutx.Unlock()
+	m.rwmutx.Lock()
+	defer m.rwmutx.Unlock()
 
-	err = munmap(m.data)
+	err = unmapData(m.data)
 	if err != nil {
 		Logger.Trace(err)
 		return err
@@ -242,7 +308,7 @@ func (m *Map) Close() (err error) {
 	return nil
 }
 
-func (m *Map) read(p []byte, off int64) (n int, err error) {
+func (m *mfile) read(p []byte, off int64) (n int, err error) {
 	var src []byte
 	var end = off + int64(len(p))
 
@@ -259,7 +325,7 @@ func (m *Map) read(p []byte, off int64) (n int, err error) {
 	return n, err
 }
 
-func (m *Map) write(p []byte, off int64) (n int, err error) {
+func (m *mfile) write(p []byte, off int64) (n int, err error) {
 	var dst []byte
 	var end = off + int64(len(p))
 
@@ -277,7 +343,7 @@ func (m *Map) write(p []byte, off int64) (n int, err error) {
 	return n, nil
 }
 
-func (m *Map) grow(size int64) (err error) {
+func (m *mfile) grow(size int64) (err error) {
 	lock := m.lock
 
 	if lock {
@@ -290,20 +356,20 @@ func (m *Map) grow(size int64) (err error) {
 		m.lock = false
 	}
 
-	err = munmap(m.data)
+	err = unmapData(m.data)
 	if err != nil {
 		Logger.Trace(err)
 		return err
 	}
 
-	err = grow(m.file, size, m.size)
+	err = growFile(m.file, size)
 	if err != nil {
 		Logger.Trace(err)
 		return err
 	}
 
 	m.size += size
-	m.data, err = mmap(m.file, 0, m.size)
+	m.data, err = mmapFile(m.file, 0, m.size)
 	if err != nil {
 		Logger.Trace(err)
 		return err
@@ -322,10 +388,18 @@ func (m *Map) grow(size int64) (err error) {
 	return nil
 }
 
-// grow grows a file with `size` number of bytes.
+// growFile grows a file with `size` number of bytes.
 // `fsize` is the current file size in bytes.
 // empty bytes are appended to the end of the file.
-func grow(file *os.File, size, fsize int64) (err error) {
+func growFile(file *os.File, size int64) (err error) {
+	finfo, err := file.Stat()
+	if err != nil {
+		Logger.Trace(err)
+		return err
+	}
+
+	fsize := finfo.Size()
+
 	// number of complete chunks to write
 	chunksCount := size / ChunkSize
 
@@ -358,10 +432,10 @@ func grow(file *os.File, size, fsize int64) (err error) {
 	return nil
 }
 
-// mmap function creates a new memory map for the given file.
+// mmapFile creates a new memory map with the given file.
 // if the file size is zero, a memory cannot be created therefore
-// an empty byte array is returned instead.
-func mmap(file *os.File, from, to int64) (data []byte, err error) {
+// an empty byte array is returned instead (no errors returned).
+func mmapFile(file *os.File, from, to int64) (data []byte, err error) {
 	fd := int(file.Fd())
 	ln := int(to - from)
 
@@ -370,26 +444,50 @@ func mmap(file *os.File, from, to int64) (data []byte, err error) {
 		return data, nil
 	}
 
-	return syscall.Mmap(fd, from, ln, FileProt, FileFlag)
+	data, err = syscall.Mmap(fd, from, ln, FileProt, FileFlag)
+	if err != nil {
+		Logger.Trace(err)
+		return nil, err
+	}
+
+	return data, nil
 }
 
-// munmap unmaps mapped data
+// unmapData unmaps mapped data and releases memory
 // If the data size is zero, a map cannot exist
 // therefore assume no errors and return nil
-func munmap(data []byte) (err error) {
+func unmapData(data []byte) (err error) {
 	if len(data) == 0 {
 		return nil
 	}
 
-	return syscall.Munmap(data)
+	err = syscall.Munmap(data)
+	if err != nil {
+		Logger.Trace(err)
+		return err
+	}
+
+	return nil
 }
 
-// mlock locks data to physical memory
-func mlock(data []byte) (err error) {
-	return syscall.Mlock(data)
+// lockData locks data to physical memory
+func lockData(data []byte) (err error) {
+	err = syscall.Mlock(data)
+	if err != nil {
+		Logger.Trace(err)
+		return err
+	}
+
+	return nil
 }
 
-// munlock releases locked memory space
-func munlock(data []byte) (err error) {
-	return syscall.Munlock(data)
+// unlockData releases locked memory
+func unlockData(data []byte) (err error) {
+	err = syscall.Munlock(data)
+	if err != nil {
+		Logger.Trace(err)
+		return err
+	}
+
+	return nil
 }

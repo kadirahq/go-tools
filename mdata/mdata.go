@@ -35,7 +35,7 @@ type Data interface {
 
 type mdata struct {
 	proto proto.Message
-	mfile *mmap.Map
+	mfile mmap.File
 	mutex *sync.Mutex
 	ronly bool
 	dbuff []byte

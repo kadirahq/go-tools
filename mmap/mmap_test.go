@@ -31,7 +31,7 @@ func TestGrow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	toGrow := int64(AllocChunkSize + 5)
+	toGrow := int64(ChunkSize + 5)
 	err = m.Grow(toGrow)
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func TestAutoGrow(t *testing.T) {
 	fpath := "/tmp/m1"
 	defer os.Remove(fpath)
 
-	toGrow := int64(AllocChunkSize + 5)
+	toGrow := int64(ChunkSize + 5)
 	m, err := New(&Options{Path: fpath, Size: toGrow})
 	if err != nil {
 		t.Fatal(err)
