@@ -40,9 +40,9 @@ func TNewOptions(t *testing.T, o *Options) {
 	defer sf.Close()
 }
 
-// func TestNewOptionsDefault(t *testing.T) {
-// 	TNewOptions(t, &Options{Directory: TmpDir})
-// }
+func TestNewOptionsDefault(t *testing.T) {
+	TNewOptions(t, &Options{Directory: TmpDir})
+}
 
 func TestNewOptionsAllOptions(t *testing.T) {
 	TNewOptions(t, &Options{

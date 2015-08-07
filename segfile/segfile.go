@@ -17,8 +17,11 @@ const (
 	// DirectoryPerm is the permission set for new directories
 	DirectoryPerm = 0755
 
-	// FileMode used when opening files for direct read/write
-	FileMode = os.O_CREATE | os.O_RDWR
+	// FileModeAlloc used when opening files for direct read/write
+	FileModeAlloc = os.O_CREATE | os.O_RDWR
+
+	// FileModeLoad used when opening files for direct read/write
+	FileModeLoad = os.O_RDWR
 
 	// FilePerm used when opening files for direct read/write
 	FilePerm = 0644
@@ -543,7 +546,7 @@ func (f *file) allocateSpace(sz int64) (err error) {
 		idStr := strconv.Itoa(int(segID))
 		fpath := pathPrefix + idStr
 
-		err = createFile(fpath, segID)
+		err = createFile(fpath, meta.SegmentSize)
 		if err != nil {
 			Logger.Trace(err)
 			return err
@@ -654,7 +657,7 @@ func writeData(w io.WriterAt, p []byte, off int64) (n int, err error) {
 // loadFile loads a segment file at path and returns it
 // It also ensures that these files are valid and has correct size.
 func loadFile(fpath string, sz int64) (file *os.File, err error) {
-	file, err = os.OpenFile(fpath, FileMode, FilePerm)
+	file, err = os.OpenFile(fpath, FileModeLoad, FilePerm)
 	if err != nil {
 		Logger.Trace(err)
 		return nil, err
@@ -734,15 +737,15 @@ func closeMMaps(mmaps []mmap.File) {
 
 // createFile creates a new file at `fpath` with size `sz`
 // After creating the file, it's content should be all zeroes.
-func createFile(fpath string, size int64) (err error) {
-	file, err := os.OpenFile(fpath, FileMode, FilePerm)
+func createFile(fpath string, sz int64) (err error) {
+	file, err := os.OpenFile(fpath, FileModeAlloc, FilePerm)
 	if err != nil {
 		Logger.Trace(err)
 		return err
 	}
 
 	// number of chunks to write
-	chunks := size / ChunkSize
+	chunks := sz / ChunkSize
 
 	var i int64
 	for i = 0; i < chunks; i++ {
@@ -758,7 +761,7 @@ func createFile(fpath string, size int64) (err error) {
 	}
 
 	// write all remaining bytes
-	toWrite := size % ChunkSize
+	toWrite := sz % ChunkSize
 	zeroes := ChunkBytes[:toWrite]
 	offset := ChunkSize * chunks
 	n, err := file.WriteAt(zeroes, offset)
