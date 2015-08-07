@@ -69,7 +69,17 @@ func New(path string, pb proto.Message, ro bool) (d Data, err error) {
 	}
 
 	err = pp.load()
-	if err != nil {
+	if err == io.EOF {
+		if err = pp.save(); err != nil {
+			Logger.Trace(err)
+
+			if err := mfile.Close(); err != nil {
+				Logger.Error(err)
+			}
+
+			return nil, err
+		}
+	} else if err != nil {
 		Logger.Trace(err)
 
 		if err := mfile.Close(); err != nil {
@@ -110,7 +120,7 @@ func (d *mdata) Load() (err error) {
 	if d.doLoad {
 		d.doLoad = false
 		err = d.load()
-		if err != nil {
+		if err != nil && err != io.EOF {
 			d.loading = false
 			Logger.Trace(err)
 			return err
@@ -186,9 +196,7 @@ func (d *mdata) load() (err error) {
 
 	var sz uint32
 	err = binary.Read(d.mfile, binary.LittleEndian, &sz)
-	if err == io.EOF {
-		return nil
-	} else if err != nil {
+	if err != nil {
 		Logger.Trace(err)
 		return err
 	}
