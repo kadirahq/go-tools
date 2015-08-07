@@ -117,7 +117,7 @@ type mfile struct {
 	rwmutx *sync.RWMutex
 
 	// growth mutex to control Grow calls
-	grmutx *sync.RWMutex
+	grmutx *sync.Mutex
 
 	// io.Reader read offset
 	roffset int64
@@ -187,7 +187,7 @@ func New(options *Options) (mf File, err error) {
 		size:    size,
 		file:    file,
 		rwmutx:  &sync.RWMutex{},
-		grmutx:  &sync.RWMutex{},
+		grmutx:  &sync.Mutex{},
 	}
 
 	return mf, nil
