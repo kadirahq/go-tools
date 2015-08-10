@@ -38,7 +38,7 @@ const (
 	// AllocThreshold is the percentage of a segment size used as a
 	// threshold value to allocate a new segment file. When free space
 	// goes below this threshold a new segment file will be allocated.
-	AllocThreshold = 10
+	AllocThreshold = 50
 
 	// ChunkSize is the number of bytes to write at a time.
 	// When creating new files, create it in small chunks.
@@ -111,7 +111,7 @@ type Options struct {
 // DefaultOptions has values to use for missing fields
 var DefaultOptions = &Options{
 	FilePrefix:  "seg_",
-	SegmentSize: 100 * 1024 * 1024,
+	SegmentSize: 20 * 1024 * 1024,
 	MemoryMap:   false,
 	ReadOnly:    false,
 }
