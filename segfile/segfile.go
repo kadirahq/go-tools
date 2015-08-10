@@ -7,6 +7,7 @@ import (
 	"path"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/kadirahq/go-tools/logger"
 	"github.com/kadirahq/go-tools/mdata"
@@ -71,6 +72,15 @@ var (
 
 	// ErrNotMapped is returned when files are not mapped
 	ErrNotMapped = errors.New("files are not mapped")
+
+	// ErrNoSeg is returned when segment is missing
+	ErrNoSeg = errors.New("segment is missing")
+
+	// ErrROnly is returned when attempt to write on read-only segfile
+	ErrROnly = errors.New("segment file is read-only")
+
+	// ErrParams is returned when given parameters are invalid
+	ErrParams = errors.New("parameters are invalid")
 
 	// ChunkBytes is a ChunkSize size slice of zeroes
 	ChunkBytes = make([]byte, ChunkSize)
@@ -170,14 +180,14 @@ type file struct {
 	// set to true when the file is closed
 	closed bool
 
+	// set to true when the file is read only
+	ronly bool
+
 	// set to true while a pre allocation is running
 	prealloc bool
 
-	// io.Reader read offset
-	roffset int64
-
-	// io.Reader write offset
-	woffset int64
+	// io.Reader/io.Writer offset
+	rwoffset int64
 }
 
 // New creates a File struct with given options.
@@ -238,6 +248,7 @@ func New(options *Options) (sf File, err error) {
 		rwmutex: &sync.RWMutex{},
 		almutex: &sync.Mutex{},
 		grmutex: &sync.Mutex{},
+		ronly:   options.ReadOnly,
 	}
 
 	if options.MemoryMap {
@@ -252,9 +263,8 @@ func New(options *Options) (sf File, err error) {
 		return nil, err
 	}
 
-	if !options.ReadOnly {
-		// initial pre-allocation
-		go f.preallocateIfNeeded()
+	if !f.ronly {
+		f.preallocateIfNeeded()
 	}
 
 	return f, nil
@@ -266,17 +276,14 @@ func (f *file) Read(p []byte) (n int, err error) {
 		return 0, ErrClosed
 	}
 
-	f.rwmutex.RLock()
-	defer f.rwmutex.RUnlock()
-
-	n, err = f.ReadAt(p, f.roffset)
+	n, err = f.ReadAt(p, f.rwoffset)
 	if err != nil {
 		Logger.Trace(err)
 		return 0, err
 	}
 
-	f.roffset += int64(n)
-	return 0, nil
+	atomic.AddInt64(&f.rwoffset, int64(n))
+	return n, nil
 }
 
 func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
@@ -285,21 +292,72 @@ func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
 		return 0, ErrClosed
 	}
 
+	if p == nil || off < 0 {
+		Logger.Trace(ErrParams)
+		return 0, ErrParams
+	}
+
 	f.rwmutex.RLock()
 	defer f.rwmutex.RUnlock()
 
-	if f.mapped {
-		n, err = f.readMMaps(p, off)
+	meta := f.meta
+	szint := len(p)
+	szi64 := int64(szint)
+	sseg := off / meta.SegmentSize
+	soff := off % meta.SegmentSize
+	eseg := (szi64 + off) / meta.SegmentSize
+	eoff := (szi64 + off) % meta.SegmentSize
+
+	if sseg >= meta.SegmentFiles {
+		return 0, io.EOF
+	}
+
+	if eseg < meta.SegmentFiles {
+		n = szint
 	} else {
-		n, err = f.readFiles(p, off)
+		eseg = meta.SegmentFiles
+		eoff = meta.SegmentSize
+		n = int(meta.SegmentSize*(eseg-sseg) + meta.SegmentSize - soff)
 	}
 
-	if err != nil {
-		Logger.Trace(err)
-		return 0, err
+	for i := sseg; i <= eseg; i++ {
+		var reader io.ReaderAt
+		var srcStart, srcEnd int64
+
+		if i == sseg {
+			srcStart = soff
+		} else {
+			srcStart = 0
+		}
+
+		if i == eseg {
+			srcEnd = eoff
+		} else {
+			srcEnd = meta.SegmentSize
+		}
+
+		segStart := i * meta.SegmentSize
+		dstStart := segStart + srcStart - off
+		dstEnd := segStart + srcEnd - off
+		data := p[dstStart:dstEnd]
+
+		if f.mapped {
+			reader = f.mmaps[i]
+		} else {
+			reader = f.files[i]
+		}
+
+		n, err := reader.ReadAt(data, srcStart)
+		if err != nil {
+			Logger.Trace(err)
+			return 0, err
+		} else if n != len(data) {
+			Logger.Trace(ErrWrite)
+			return 0, ErrWrite
+		}
 	}
 
-	return n, err
+	return n, nil
 }
 
 func (f *file) Write(p []byte) (n int, err error) {
@@ -308,17 +366,14 @@ func (f *file) Write(p []byte) (n int, err error) {
 		return 0, ErrClosed
 	}
 
-	f.rwmutex.Lock()
-	defer f.rwmutex.Unlock()
-
-	n, err = f.WriteAt(p, f.woffset)
+	n, err = f.WriteAt(p, f.rwoffset)
 	if err != nil {
 		Logger.Trace(err)
 		return 0, err
 	}
 
-	f.woffset += int64(n)
-	return 0, nil
+	atomic.AddInt64(&f.rwoffset, int64(n))
+	return n, nil
 }
 
 func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
@@ -327,21 +382,82 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 		return 0, ErrClosed
 	}
 
+	if f.ronly {
+		Logger.Trace(ErrROnly)
+		return 0, ErrROnly
+	}
+
+	if p == nil || off < 0 {
+		Logger.Trace(ErrParams)
+		return 0, ErrParams
+	}
+
+	// pre-allocate in background go routine
+	// go routine started only if necessary
+	f.preallocateIfNeeded()
+
 	f.rwmutex.Lock()
 	defer f.rwmutex.Unlock()
 
-	if f.mapped {
-		n, err = f.writeMMaps(p, off)
-	} else {
-		n, err = f.writeFiles(p, off)
+	meta := f.meta
+	size := int64(len(p))
+
+	// additional space required for write
+	// allocated in current go routine (before write)
+	total := meta.SegmentFiles * meta.SegmentSize
+	if sz := off + size - total; sz > 0 {
+		err = f.ensureSpace(sz)
+		if err != nil {
+			Logger.Trace(err)
+			return 0, err
+		}
 	}
 
-	if err != nil {
-		Logger.Trace(err)
-		return 0, err
+	sseg := off / meta.SegmentSize
+	soff := off % meta.SegmentSize
+	eseg := (size + off) / meta.SegmentSize
+	eoff := (size + off) % meta.SegmentSize
+
+	for i := sseg; i <= eseg; i++ {
+		var writer io.WriterAt
+		var dstStart, dstEnd int64
+
+		if i == sseg {
+			dstStart = soff
+		} else {
+			dstStart = 0
+		}
+
+		if i == eseg {
+			dstEnd = eoff
+		} else {
+			dstEnd = meta.SegmentSize
+		}
+
+		segStart := i * meta.SegmentSize
+		srcStart := segStart + dstStart - off
+		srcEnd := segStart + dstEnd - off
+		data := p[srcStart:srcEnd]
+
+		if f.mapped {
+			writer = f.mmaps[i]
+		} else {
+			writer = f.files[i]
+		}
+
+		num, err := writer.WriteAt(data, dstStart)
+		if err != nil {
+			Logger.Trace(err)
+			return 0, err
+		} else if num != len(data) {
+			Logger.Trace(ErrWrite)
+			return 0, ErrWrite
+		}
+
+		n = int(srcEnd)
 	}
 
-	return 0, nil
+	return n, nil
 }
 
 func (f *file) Info() (meta *Metadata) {
@@ -493,30 +609,6 @@ func (f *file) Close() (err error) {
 	closeMMaps(f.mmaps)
 
 	return nil
-}
-
-// readFiles reads data from files
-func (f *file) readFiles(p []byte, off int64) (n int, err error) {
-	// TODO code!
-	return 0, nil
-}
-
-// readMMaps reads data from memory maps
-func (f *file) readMMaps(p []byte, off int64) (n int, err error) {
-	// TODO code!
-	return 0, nil
-}
-
-// writeFiles reads data from files
-func (f *file) writeFiles(p []byte, off int64) (n int, err error) {
-	// TODO code!
-	return 0, nil
-}
-
-// writeMMaps reads data from memory maps
-func (f *file) writeMMaps(p []byte, off int64) (n int, err error) {
-	// TODO code!
-	return 0, nil
 }
 
 // shouldAllocate checks whether there's free space to store sz bytes
@@ -692,18 +784,6 @@ func (f *file) loadMMaps() (err error) {
 	closeMMaps(prev)
 
 	return nil
-}
-
-// readData reads data from an io.ReaderAt (a file or a memory map)
-func readData(r io.ReaderAt, p []byte, off int64) (n int, err error) {
-	// TODO code!
-	return 0, nil
-}
-
-// writeData writes data to a io.WriterAt (a file or a memory map)
-func writeData(w io.WriterAt, p []byte, off int64) (n int, err error) {
-	// TODO code!
-	return 0, nil
 }
 
 // loadFile loads a segment file at path and returns it

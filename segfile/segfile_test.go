@@ -1,17 +1,30 @@
 package segfile
 
 import (
+	"fmt"
 	"os"
+	"reflect"
 	"runtime"
 	"testing"
 )
 
 const (
-	TmpDir = "/tmp/sfile"
+	dir = "/tmp/sfile"
 )
 
-func TNewOptions(t *testing.T, o *Options) {
-	err := os.RemoveAll(TmpDir)
+var (
+	OptionsSet = map[string]*Options{
+		"defaults": &Options{Directory: dir},
+		"prefixed": &Options{Directory: dir, FilePrefix: "test_"},
+		"filesize": &Options{Directory: dir, SegmentSize: 5 * 1024 * 1024},
+		"ro-files": &Options{Directory: dir, ReadOnly: true},
+		"rw-mmaps": &Options{Directory: dir, MemoryMap: true},
+		"ro-mmaps": &Options{Directory: dir, MemoryMap: true, ReadOnly: true},
+	}
+)
+
+func TNewWithOptions(t *testing.T, o *Options) {
+	err := os.RemoveAll(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,28 +80,79 @@ func TNewOptions(t *testing.T, o *Options) {
 		t.Fatal(err)
 	}
 
-	err = os.RemoveAll(TmpDir)
+	err = os.RemoveAll(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestNewOptionsDefault(t *testing.T) {
-	TNewOptions(t, &Options{Directory: TmpDir})
+func TestNew(t *testing.T) {
+	for k, o := range OptionsSet {
+		fmt.Println(" - testing with options:", k)
+		TNewWithOptions(t, o)
+	}
 }
 
-func TestNewOptionsFilePrefix(t *testing.T) {
-	TNewOptions(t, &Options{Directory: TmpDir, FilePrefix: "test_"})
+func TWriteAtReadAtWithOptions(t *testing.T, o *Options) {
+	ro := o.ReadOnly
+	o.ReadOnly = false
+
+	err := os.RemoveAll(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sf, err := New(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p := []byte{1, 2, 3, 4}
+	off := o.SegmentSize - 2
+	n, err := sf.WriteAt(p, off)
+	if err != nil {
+		t.Fatal(err)
+	} else if n != 4 {
+		t.Fatal("write error")
+	}
+
+	err = sf.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	o.ReadOnly = ro
+	sf, err = New(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := make([]byte, 4)
+	n, err = sf.ReadAt(r, off)
+	if err != nil {
+		t.Fatal(err)
+	} else if n != 4 {
+		t.Fatal("read error")
+	}
+
+	if !reflect.DeepEqual(p, r) {
+		t.Fatal("wrong values")
+	}
+
+	err = sf.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.RemoveAll(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
-func TestNewOptionsReadOnly(t *testing.T) {
-	TNewOptions(t, &Options{Directory: TmpDir, ReadOnly: true})
-}
-
-func TestNewOptionsSegSize(t *testing.T) {
-	TNewOptions(t, &Options{Directory: TmpDir, SegmentSize: 5 * 1024 * 1024})
-}
-
-func TestNewOptionsMemMap(t *testing.T) {
-	TNewOptions(t, &Options{Directory: TmpDir, MemoryMap: true})
+func TestWriteAtReadAt(t *testing.T) {
+	for k, o := range OptionsSet {
+		fmt.Println(" - testing with options:", k)
+		TWriteAtReadAtWithOptions(t, o)
+	}
 }
