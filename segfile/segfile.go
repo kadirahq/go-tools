@@ -473,6 +473,10 @@ func (f *file) writeMMaps(p []byte, off int64) (n int, err error) {
 
 // shouldAllocate checks whether there's free space to store sz bytes
 func (f *file) shouldAllocate(sz int64) (do bool) {
+	if f.closed {
+		return false
+	}
+
 	meta := f.meta
 	total := meta.SegmentSize * meta.SegmentFiles
 	return meta.DataSize+sz > total
