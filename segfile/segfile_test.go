@@ -38,7 +38,39 @@ func TNewOptions(t *testing.T, o *Options) {
 		t.Fatal(err)
 	}
 
-	defer sf.Close()
+	err = sf.MemMap()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = sf.MemLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = sf.MUnlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = sf.MUnMap()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = sf.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.RemoveAll(TmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestNewOptionsDefault(t *testing.T) {

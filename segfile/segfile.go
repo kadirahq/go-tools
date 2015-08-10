@@ -124,11 +124,19 @@ type File interface {
 
 	// MemMap maps all files and switches to mmap mode
 	// All reads and writes will be performed with mmaps
-	MemMap(lock bool) (err error)
+	MemMap() (err error)
 
-	// MUnmap unmaps all maps and switches to file mode
+	// MUnMap unmaps all maps and switches to file mode
 	// All reads and writes will be performed with files
-	MUnmap() (err error)
+	MUnMap() (err error)
+
+	// MemLock loads all memory maps into main memory.
+	// This takes time but can help to avoid page faults.
+	MemLock() (err error)
+
+	// MUnlock unlocks memory to be freed by the OS if needed.
+	// When Close is called, this will happen automatically (inside mmap)
+	MUnlock() (err error)
 
 	// Close cleans up everything and closes files
 	Close() (err error)
@@ -366,7 +374,7 @@ func (f *file) Grow(sz int64) (err error) {
 	return nil
 }
 
-func (f *file) MemMap(lock bool) (err error) {
+func (f *file) MemMap() (err error) {
 	if f.closed {
 		Logger.Trace(ErrClosed)
 		return ErrClosed
@@ -389,12 +397,15 @@ func (f *file) MemMap(lock bool) (err error) {
 	defer f.rwmutex.Unlock()
 
 	f.mapped = true
-	closeFiles(f.files)
+
+	files := f.files
+	f.files = f.files[:0]
+	closeFiles(files)
 
 	return nil
 }
 
-func (f *file) MUnmap() (err error) {
+func (f *file) MUnMap() (err error) {
 	if f.closed {
 		Logger.Trace(ErrClosed)
 		return ErrClosed
@@ -417,7 +428,44 @@ func (f *file) MUnmap() (err error) {
 	defer f.rwmutex.Unlock()
 
 	f.mapped = false
-	closeMMaps(f.mmaps)
+
+	mmaps := f.mmaps
+	f.mmaps = f.mmaps[:0]
+	closeMMaps(mmaps)
+
+	return nil
+}
+
+func (f *file) MemLock() (err error) {
+	if !f.mapped {
+		Logger.Trace(ErrNotMapped)
+		return ErrNotMapped
+	}
+
+	for _, mfile := range f.mmaps {
+		err = mfile.Lock()
+		if err != nil {
+			Logger.Error(err)
+			return nil
+		}
+	}
+
+	return nil
+}
+
+func (f *file) MUnlock() (err error) {
+	if !f.mapped {
+		Logger.Trace(ErrNotMapped)
+		return ErrNotMapped
+	}
+
+	for _, mfile := range f.mmaps {
+		err = mfile.Unlock()
+		if err != nil {
+			Logger.Error(err)
+			return nil
+		}
+	}
 
 	return nil
 }
