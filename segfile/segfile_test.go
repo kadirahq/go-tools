@@ -156,3 +156,128 @@ func TestWriteAtReadAt(t *testing.T) {
 		TWriteAtReadAtWithOptions(t, o)
 	}
 }
+
+func BAllocateWithSegmentSize(b *testing.B, o *Options) {
+	if b.N > 10 {
+		b.N = 10
+	}
+
+	err := os.RemoveAll(dir)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	sf, err := New(o)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	b.SetParallelism(10)
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			sf.Grow(o.SegmentSize)
+		}
+	})
+}
+
+func BenchmarkAllocateWithSegmentSize_10M(b *testing.B) {
+	o := &Options{Directory: dir, SegmentSize: 10 * 1024 * 1024}
+	BAllocateWithSegmentSize(b, o)
+}
+
+func BenchmarkAllocateWithSegmentSize_20M(b *testing.B) {
+	o := &Options{Directory: dir, SegmentSize: 20 * 1024 * 1024}
+	BAllocateWithSegmentSize(b, o)
+}
+
+func BenchmarkAllocateWithSegmentSize_100M(b *testing.B) {
+	o := &Options{Directory: dir, SegmentSize: 100 * 1024 * 1024}
+	BAllocateWithSegmentSize(b, o)
+}
+
+func BWriteWithPayloadSize(b *testing.B, o *Options, size int, lock bool) {
+	if b.N > 10000 {
+		b.N = 10000
+	}
+
+	err := os.RemoveAll(dir)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	sf, err := New(o)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	if lock {
+		err = sf.MemLock()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	p := make([]byte, size)
+	n, err := sf.Write(p)
+	if err != nil {
+		b.Fatal(err)
+	} else if n != size {
+		b.Fatal("write error")
+	}
+
+	b.ResetTimer()
+	b.SetParallelism(10)
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			sf.Write(p)
+		}
+	})
+}
+
+func BenchmarkFileWriteWithPayloadSize_10B(b *testing.B) {
+	o := &Options{Directory: dir}
+	BWriteWithPayloadSize(b, o, 10, false)
+}
+
+func BenchmarkFileWriteWithPayloadSize_20B(b *testing.B) {
+	o := &Options{Directory: dir}
+	BWriteWithPayloadSize(b, o, 20, false)
+}
+
+func BenchmarkFileWriteWithPayloadSize_100B(b *testing.B) {
+	o := &Options{Directory: dir}
+	BWriteWithPayloadSize(b, o, 100, false)
+}
+
+func BenchmarkMMapWriteWithPayloadSize_10B(b *testing.B) {
+	o := &Options{Directory: dir, MemoryMap: true}
+	BWriteWithPayloadSize(b, o, 10, false)
+}
+
+func BenchmarkMMapWriteWithPayloadSize_20B(b *testing.B) {
+	o := &Options{Directory: dir, MemoryMap: true}
+	BWriteWithPayloadSize(b, o, 20, false)
+}
+
+func BenchmarkMMapWriteWithPayloadSize_100B(b *testing.B) {
+	o := &Options{Directory: dir, MemoryMap: true}
+	BWriteWithPayloadSize(b, o, 100, false)
+}
+
+func BenchmarkMLockWriteWithPayloadSize_10B(b *testing.B) {
+	o := &Options{Directory: dir, MemoryMap: true}
+	BWriteWithPayloadSize(b, o, 10, true)
+}
+
+func BenchmarkMLockWriteWithPayloadSize_20B(b *testing.B) {
+	o := &Options{Directory: dir, MemoryMap: true}
+	BWriteWithPayloadSize(b, o, 20, true)
+}
+
+func BenchmarkMLockWriteWithPayloadSize_100B(b *testing.B) {
+	o := &Options{Directory: dir, MemoryMap: true}
+	BWriteWithPayloadSize(b, o, 100, true)
+}
