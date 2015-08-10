@@ -1,0 +1,19 @@
+syntax = "proto3";
+package segfile;
+
+message Metadata {
+  // directory to store files
+	string Directory = 1;
+
+  // files will be prefixed with this string
+  string FilePrefix = 2;
+
+  // size of a segment file
+  int64 SegmentSize = 3;
+
+  // available segment files
+  int64 SegmentFiles = 4;
+
+  // number of bytes used
+  int64 DataSize = 5;
+}
