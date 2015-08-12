@@ -51,30 +51,6 @@ func TNewWithOptions(t *testing.T, o *Options) {
 		t.Fatal(err)
 	}
 
-	err = sf.MemMap()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = sf.MemLock()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = sf.MUnlock()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = sf.MUnMap()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	err = sf.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -197,7 +173,7 @@ func BenchmarkAllocateWithSegmentSize_100M(b *testing.B) {
 	BAllocateWithSegmentSize(b, o)
 }
 
-func BWriteWithPayloadSize(b *testing.B, o *Options, size int, lock bool) {
+func BWriteWithPayloadSize(b *testing.B, o *Options, size int) {
 	if b.N > 10000 {
 		b.N = 10000
 	}
@@ -210,13 +186,6 @@ func BWriteWithPayloadSize(b *testing.B, o *Options, size int, lock bool) {
 	sf, err := New(o)
 	if err != nil {
 		b.Fatal(err)
-	}
-
-	if lock {
-		err = sf.MemLock()
-		if err != nil {
-			b.Fatal(err)
-		}
 	}
 
 	p := make([]byte, size)
@@ -239,45 +208,30 @@ func BWriteWithPayloadSize(b *testing.B, o *Options, size int, lock bool) {
 
 func BenchmarkFileWriteWithPayloadSize_10B(b *testing.B) {
 	o := &Options{Directory: dir}
-	BWriteWithPayloadSize(b, o, 10, false)
+	BWriteWithPayloadSize(b, o, 10)
 }
 
 func BenchmarkFileWriteWithPayloadSize_20B(b *testing.B) {
 	o := &Options{Directory: dir}
-	BWriteWithPayloadSize(b, o, 20, false)
+	BWriteWithPayloadSize(b, o, 20)
 }
 
 func BenchmarkFileWriteWithPayloadSize_100B(b *testing.B) {
 	o := &Options{Directory: dir}
-	BWriteWithPayloadSize(b, o, 100, false)
+	BWriteWithPayloadSize(b, o, 100)
 }
 
 func BenchmarkMMapWriteWithPayloadSize_10B(b *testing.B) {
 	o := &Options{Directory: dir, MemoryMap: true}
-	BWriteWithPayloadSize(b, o, 10, false)
+	BWriteWithPayloadSize(b, o, 10)
 }
 
 func BenchmarkMMapWriteWithPayloadSize_20B(b *testing.B) {
 	o := &Options{Directory: dir, MemoryMap: true}
-	BWriteWithPayloadSize(b, o, 20, false)
+	BWriteWithPayloadSize(b, o, 20)
 }
 
 func BenchmarkMMapWriteWithPayloadSize_100B(b *testing.B) {
 	o := &Options{Directory: dir, MemoryMap: true}
-	BWriteWithPayloadSize(b, o, 100, false)
-}
-
-func BenchmarkMLockWriteWithPayloadSize_10B(b *testing.B) {
-	o := &Options{Directory: dir, MemoryMap: true}
-	BWriteWithPayloadSize(b, o, 10, true)
-}
-
-func BenchmarkMLockWriteWithPayloadSize_20B(b *testing.B) {
-	o := &Options{Directory: dir, MemoryMap: true}
-	BWriteWithPayloadSize(b, o, 20, true)
-}
-
-func BenchmarkMLockWriteWithPayloadSize_100B(b *testing.B) {
-	o := &Options{Directory: dir, MemoryMap: true}
-	BWriteWithPayloadSize(b, o, 100, true)
+	BWriteWithPayloadSize(b, o, 100)
 }
