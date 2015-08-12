@@ -49,8 +49,11 @@ const (
 )
 
 var (
-	// ErrWrite is returned when bytes written not equal to data size
+	// ErrWrite is returned when bytes written is not equal to data size
 	ErrWrite = errors.New("bytes written != data size")
+
+	// ErrRead is returned when bytes read is not equal to data size
+	ErrRead = errors.New("bytes read != data size")
 
 	// ErrOptions is returned when options have missing or invalid fields.
 	ErrOptions = errors.New("invalid or missing options")
@@ -330,8 +333,8 @@ func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
 			Logger.Trace(err)
 			return 0, err
 		} else if n != len(data) {
-			Logger.Trace(ErrWrite)
-			return 0, ErrWrite
+			Logger.Trace(ErrRead)
+			return 0, ErrRead
 		}
 	}
 
