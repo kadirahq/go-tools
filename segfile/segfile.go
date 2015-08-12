@@ -286,20 +286,32 @@ func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
 		return 0, ErrParams
 	}
 
+	if len(p) == 0 {
+		// empty read
+		return 0, nil
+	}
+
 	meta := f.meta
-	szint := len(p)
-	szi64 := int64(szint)
+	size := len(p)
+	sz64 := int64(size)
 	sseg := off / meta.FileSize
 	soff := off % meta.FileSize
-	eseg := (szi64 + off) / meta.FileSize
-	eoff := (szi64 + off) % meta.FileSize
+	eseg := (sz64 + off) / meta.FileSize
+	eoff := (sz64 + off) % meta.FileSize
+
+	// if `eoff` is 0 there's no data to read from on `eseg`
+	// `eseg` will be unavailable unless it's already allocated
+	if eoff == 0 {
+		eseg--
+		eoff = meta.FileSize
+	}
 
 	if sseg >= meta.Segments {
 		return 0, io.EOF
 	}
 
 	if eseg < meta.Segments {
-		n = szint
+		n = size
 	} else {
 		eseg = meta.Segments
 		eoff = meta.FileSize
@@ -373,6 +385,11 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 		return 0, ErrParams
 	}
 
+	if len(p) == 0 {
+		// empty write
+		return 0, nil
+	}
+
 	// pre-allocate in background go routine
 	// go routine started only if necessary
 	f.preallocateIfNeeded()
@@ -395,6 +412,13 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 	soff := off % meta.FileSize
 	eseg := (size + off) / meta.FileSize
 	eoff := (size + off) % meta.FileSize
+
+	// if `eoff` is 0 there's no data to read from on `eseg`
+	// `eseg` will be unavailable unless it's already allocated
+	if eoff == 0 {
+		eseg--
+		eoff = meta.FileSize
+	}
 
 	for i := sseg; i <= eseg; i++ {
 		var writer io.WriterAt
