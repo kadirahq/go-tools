@@ -21,8 +21,11 @@ const (
 	// FileModeAlloc used when opening files for direct read/write
 	FileModeAlloc = os.O_CREATE | os.O_RDWR
 
-	// FileModeLoad used when opening files for direct read/write
+	// FileModeLoad used when opening files for direct read/write mode
 	FileModeLoad = os.O_RDWR
+
+	// FileModeRead used when opening files for direct read only mode
+	FileModeRead = os.O_RDONLY
 
 	// FilePerm used when opening files for direct read/write
 	FilePerm = 0644
@@ -101,7 +104,7 @@ type Options struct {
 	// size of a segment file
 	SegmentSize int64
 
-	// memory map by default
+	// memory map segments
 	MemoryMap bool
 
 	// no writes allowed
@@ -114,6 +117,16 @@ var DefaultOptions = &Options{
 	SegmentSize: 20 * 1024 * 1024,
 	MemoryMap:   false,
 	ReadOnly:    false,
+}
+
+// Segment is a piece of the complete virtual file. A segment is stored
+// in a file and can be loaded either directly or using memory maps.
+type Segment interface {
+	io.ReaderAt
+	io.WriterAt
+
+	// Close closes the segment
+	Close() (err error)
 }
 
 // File is similar to os.File but data is spread across many files.
@@ -132,22 +145,6 @@ type File interface {
 	// available space is not enough.
 	Grow(sz int64) (err error)
 
-	// MemMap maps all files and switches to mmap mode
-	// All reads and writes will be performed with mmaps
-	MemMap() (err error)
-
-	// MUnMap unmaps all maps and switches to file mode
-	// All reads and writes will be performed with files
-	MUnMap() (err error)
-
-	// MemLock loads all memory maps into main memory.
-	// This takes time but can help to avoid page faults.
-	MemLock() (err error)
-
-	// MUnlock unlocks memory to be freed by the OS if needed.
-	// When Close is called, this will happen automatically (inside mmap)
-	MUnlock() (err error)
-
 	// Close cleans up everything and closes files
 	Close() (err error)
 }
@@ -159,23 +156,14 @@ type file struct {
 	// metadata helper
 	mdata mdata.Data
 
-	// set to true when memory maps are used
-	mapped bool
-
-	// slice of files used for direct read/write
-	files []*os.File
-
-	// slice of memory maps for mapped read/write
-	mmaps []mmap.File
-
-	// read/write mutex
-	rwmutex *sync.RWMutex
-
-	// growth mutex to control Grow calls
-	grmutex *sync.Mutex
+	// slice of segments (files or mmaps)
+	segments []Segment
 
 	// allocation mutex to control allocations
 	almutex *sync.Mutex
+
+	// set to true when the segments are memory mapped
+	mmapped bool
 
 	// set to true when the file is closed
 	closed bool
@@ -245,14 +233,12 @@ func New(options *Options) (sf File, err error) {
 	f := &file{
 		meta:    meta,
 		mdata:   md,
-		rwmutex: &sync.RWMutex{},
 		almutex: &sync.Mutex{},
-		grmutex: &sync.Mutex{},
 		ronly:   options.ReadOnly,
 	}
 
 	if options.MemoryMap {
-		f.mapped = true
+		f.mmapped = true
 		err = f.loadMMaps()
 	} else {
 		err = f.loadFiles()
@@ -297,9 +283,6 @@ func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
 		return 0, ErrParams
 	}
 
-	f.rwmutex.RLock()
-	defer f.rwmutex.RUnlock()
-
 	meta := f.meta
 	szint := len(p)
 	szi64 := int64(szint)
@@ -340,12 +323,7 @@ func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
 		dstStart := segStart + srcStart - off
 		dstEnd := segStart + srcEnd - off
 		data := p[dstStart:dstEnd]
-
-		if f.mapped {
-			reader = f.mmaps[i]
-		} else {
-			reader = f.files[i]
-		}
+		reader = f.segments[i]
 
 		n, err := reader.ReadAt(data, srcStart)
 		if err != nil {
@@ -396,9 +374,6 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 	// go routine started only if necessary
 	f.preallocateIfNeeded()
 
-	f.rwmutex.Lock()
-	defer f.rwmutex.Unlock()
-
 	meta := f.meta
 	size := int64(len(p))
 
@@ -438,12 +413,7 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 		srcStart := segStart + dstStart - off
 		srcEnd := segStart + dstEnd - off
 		data := p[srcStart:srcEnd]
-
-		if f.mapped {
-			writer = f.mmaps[i]
-		} else {
-			writer = f.files[i]
-		}
+		writer = f.segments[i]
 
 		num, err := writer.WriteAt(data, dstStart)
 		if err != nil {
@@ -470,9 +440,6 @@ func (f *file) Grow(sz int64) (err error) {
 		return ErrClosed
 	}
 
-	f.grmutex.Lock()
-	defer f.grmutex.Unlock()
-
 	err = f.ensureSpace(sz)
 	if err != nil {
 		Logger.Trace(err)
@@ -490,110 +457,12 @@ func (f *file) Grow(sz int64) (err error) {
 	return nil
 }
 
-func (f *file) MemMap() (err error) {
-	if f.closed {
-		Logger.Trace(ErrClosed)
-		return ErrClosed
-	}
-
-	if f.mapped {
-		Logger.Error(ErrMapped)
-		return nil
-	}
-
-	err = f.loadMMaps()
-	if err != nil {
-		Logger.Trace(err)
-		return err
-	}
-
-	// complete running tasks before
-	// switching read/write mode
-	f.rwmutex.Lock()
-	defer f.rwmutex.Unlock()
-
-	f.mapped = true
-
-	files := f.files
-	f.files = f.files[:0]
-	closeFiles(files)
-
-	return nil
-}
-
-func (f *file) MUnMap() (err error) {
-	if f.closed {
-		Logger.Trace(ErrClosed)
-		return ErrClosed
-	}
-
-	if !f.mapped {
-		Logger.Error(ErrNotMapped)
-		return nil
-	}
-
-	err = f.loadFiles()
-	if err != nil {
-		Logger.Trace(err)
-		return err
-	}
-
-	// complete running tasks before
-	// switching read/write mode
-	f.rwmutex.Lock()
-	defer f.rwmutex.Unlock()
-
-	f.mapped = false
-
-	mmaps := f.mmaps
-	f.mmaps = f.mmaps[:0]
-	closeMMaps(mmaps)
-
-	return nil
-}
-
-func (f *file) MemLock() (err error) {
-	if !f.mapped {
-		Logger.Trace(ErrNotMapped)
-		return ErrNotMapped
-	}
-
-	for _, mfile := range f.mmaps {
-		err = mfile.Lock()
-		if err != nil {
-			Logger.Error(err)
-			return nil
-		}
-	}
-
-	return nil
-}
-
-func (f *file) MUnlock() (err error) {
-	if !f.mapped {
-		Logger.Trace(ErrNotMapped)
-		return ErrNotMapped
-	}
-
-	for _, mfile := range f.mmaps {
-		err = mfile.Unlock()
-		if err != nil {
-			Logger.Error(err)
-			return nil
-		}
-	}
-
-	return nil
-}
-
 func (f *file) Close() (err error) {
 	if f.closed {
 		Logger.Error(ErrClose)
 		return nil
 	}
 
-	f.rwmutex.Lock()
-	defer f.rwmutex.Unlock()
 	f.almutex.Lock()
 	defer f.almutex.Unlock()
 
@@ -605,8 +474,11 @@ func (f *file) Close() (err error) {
 		return err
 	}
 
-	closeFiles(f.files)
-	closeMMaps(f.mmaps)
+	if f.mmapped {
+		closeMMaps(f.segments)
+	} else {
+		closeFiles(f.segments)
+	}
 
 	return nil
 }
@@ -696,23 +568,20 @@ func (f *file) allocateSpace(sz int64) (err error) {
 			return err
 		}
 
-		if f.mapped {
-			mfile, err := loadMMap(fpath, meta.SegmentSize)
-			if err != nil {
-				Logger.Trace(err)
-				return err
-			}
+		var segment Segment
 
-			f.mmaps = append(f.mmaps, mfile)
+		if f.mmapped {
+			segment, err = loadMMap(fpath, meta.SegmentSize)
 		} else {
-			file, err := loadFile(fpath, meta.SegmentSize)
-			if err != nil {
-				Logger.Trace(err)
-				return err
-			}
-
-			f.files = append(f.files, file)
+			segment, err = loadFile(fpath, meta.SegmentSize)
 		}
+
+		if err != nil {
+			Logger.Trace(err)
+			return err
+		}
+
+		f.segments = append(f.segments, segment)
 	}
 
 	meta.SegmentFiles += filesCount
@@ -730,7 +599,7 @@ func (f *file) allocateSpace(sz int64) (err error) {
 // It also ensures all segment files are valid.
 func (f *file) loadFiles() (err error) {
 	meta := f.meta
-	files := make([]*os.File, meta.SegmentFiles)
+	f.segments = make([]Segment, meta.SegmentFiles)
 
 	if meta.SegmentFiles > 0 {
 		var i int64
@@ -738,20 +607,16 @@ func (f *file) loadFiles() (err error) {
 			istr := strconv.Itoa(int(i))
 			fpath := path.Join(meta.Directory, meta.FilePrefix+istr)
 
-			file, err := loadFile(fpath, meta.SegmentSize)
+			segment, err := loadFile(fpath, meta.SegmentSize)
 			if err != nil {
 				Logger.Trace(err)
-				closeFiles(files)
+				closeFiles(f.segments)
 				return err
 			}
 
-			files[i] = file
+			f.segments[i] = segment
 		}
 	}
-
-	prev := f.files
-	f.files = files
-	closeFiles(prev)
 
 	return nil
 }
@@ -760,7 +625,7 @@ func (f *file) loadFiles() (err error) {
 // segfile metadata. It also ensures all memory maps are valid.
 func (f *file) loadMMaps() (err error) {
 	meta := f.meta
-	mmaps := make([]mmap.File, meta.SegmentFiles)
+	f.segments = make([]Segment, meta.SegmentFiles)
 
 	if meta.SegmentFiles > 0 {
 		var i int64
@@ -768,20 +633,16 @@ func (f *file) loadMMaps() (err error) {
 			istr := strconv.Itoa(int(i))
 			fpath := path.Join(meta.Directory, meta.FilePrefix+istr)
 
-			mfile, err := loadMMap(fpath, meta.SegmentSize)
+			segment, err := loadMMap(fpath, meta.SegmentSize)
 			if err != nil {
 				Logger.Trace(err)
-				closeMMaps(mmaps)
+				closeMMaps(f.segments)
 				return err
 			}
 
-			mmaps[i] = mfile
+			f.segments[i] = segment
 		}
 	}
-
-	prev := f.mmaps
-	f.mmaps = mmaps
-	closeMMaps(prev)
 
 	return nil
 }
@@ -828,11 +689,17 @@ func loadMMap(fpath string, sz int64) (mfile mmap.File, err error) {
 		return nil, err
 	}
 
+	err = mfile.Lock()
+	if err != nil {
+		Logger.Trace(err)
+		return nil, err
+	}
+
 	return mfile, nil
 }
 
 // closeFiles closes a slice of files
-func closeFiles(files []*os.File) {
+func closeFiles(files []Segment) {
 	if files == nil {
 		return
 	}
@@ -850,7 +717,7 @@ func closeFiles(files []*os.File) {
 }
 
 // closeMMaps closes a slice of mmaps
-func closeMMaps(mmaps []mmap.File) {
+func closeMMaps(mmaps []Segment) {
 	if mmaps == nil {
 		return
 	}
