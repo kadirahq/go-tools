@@ -99,13 +99,13 @@ var (
 type Options struct {
 	// directory to store files
 	// this field if required
-	Directory string
+	Path string
 
 	// files will be prefixed
-	FilePrefix string
+	Prefix string
 
 	// size of a segment file
-	SegmentSize int64
+	FileSize int64
 
 	// memory map segments
 	MemoryMap bool
@@ -116,10 +116,10 @@ type Options struct {
 
 // DefaultOptions has values to use for missing fields
 var DefaultOptions = &Options{
-	FilePrefix:  "seg_",
-	SegmentSize: 20 * 1024 * 1024,
-	MemoryMap:   false,
-	ReadOnly:    false,
+	Prefix:    "seg_",
+	FileSize:  20 * 1024 * 1024,
+	MemoryMap: false,
+	ReadOnly:  false,
 }
 
 // Segment is a piece of the complete virtual file. A segment is stored
@@ -186,23 +186,23 @@ type file struct {
 func New(options *Options) (sf File, err error) {
 	// validate options
 	if options == nil ||
-		options.Directory == "" ||
-		options.SegmentSize < 0 {
+		options.Path == "" ||
+		options.FileSize < 0 {
 		Logger.Trace(ErrOptions)
 		return nil, ErrOptions
 	}
 
 	// set default values for options
-	if options.FilePrefix == "" {
-		options.FilePrefix = DefaultOptions.FilePrefix
+	if options.Prefix == "" {
+		options.Prefix = DefaultOptions.Prefix
 	}
 
-	if options.SegmentSize == 0 {
-		options.SegmentSize = DefaultOptions.SegmentSize
+	if options.FileSize == 0 {
+		options.FileSize = DefaultOptions.FileSize
 	}
 
 	// make sure target directory exists
-	err = os.MkdirAll(options.Directory, DirectoryPerm)
+	err = os.MkdirAll(options.Path, DirectoryPerm)
 	if err != nil {
 		Logger.Trace(err)
 		return nil, err
@@ -210,12 +210,12 @@ func New(options *Options) (sf File, err error) {
 
 	// create/load metadata
 	meta := &Metadata{
-		Directory:   options.Directory,
-		FilePrefix:  options.FilePrefix,
-		SegmentSize: options.SegmentSize,
+		Path:     options.Path,
+		Prefix:   options.Prefix,
+		FileSize: options.FileSize,
 	}
 
-	mdpath := path.Join(options.Directory, options.FilePrefix+MetadataFile)
+	mdpath := path.Join(options.Path, options.Prefix+MetadataFile)
 	md, err := mdata.New(mdpath, meta, options.ReadOnly)
 	if err != nil {
 		Logger.Trace(err)
@@ -223,12 +223,12 @@ func New(options *Options) (sf File, err error) {
 	}
 
 	// validate metadata file
-	if meta.Directory != options.Directory ||
-		meta.FilePrefix != options.FilePrefix ||
-		meta.SegmentSize < 0 ||
-		meta.SegmentFiles < 0 ||
+	if meta.Path != options.Path ||
+		meta.Prefix != options.Prefix ||
+		meta.FileSize < 0 ||
+		meta.Segments < 0 ||
 		meta.DataSize < 0 ||
-		meta.DataSize > meta.SegmentFiles*meta.SegmentSize {
+		meta.DataSize > meta.Segments*meta.FileSize {
 		Logger.Trace(ErrMData)
 		return nil, ErrMData
 	}
@@ -289,21 +289,21 @@ func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
 	meta := f.meta
 	szint := len(p)
 	szi64 := int64(szint)
-	sseg := off / meta.SegmentSize
-	soff := off % meta.SegmentSize
-	eseg := (szi64 + off) / meta.SegmentSize
-	eoff := (szi64 + off) % meta.SegmentSize
+	sseg := off / meta.FileSize
+	soff := off % meta.FileSize
+	eseg := (szi64 + off) / meta.FileSize
+	eoff := (szi64 + off) % meta.FileSize
 
-	if sseg >= meta.SegmentFiles {
+	if sseg >= meta.Segments {
 		return 0, io.EOF
 	}
 
-	if eseg < meta.SegmentFiles {
+	if eseg < meta.Segments {
 		n = szint
 	} else {
-		eseg = meta.SegmentFiles
-		eoff = meta.SegmentSize
-		n = int(meta.SegmentSize*(eseg-sseg) + meta.SegmentSize - soff)
+		eseg = meta.Segments
+		eoff = meta.FileSize
+		n = int(meta.FileSize*(eseg-sseg) + meta.FileSize - soff)
 	}
 
 	for i := sseg; i <= eseg; i++ {
@@ -319,10 +319,10 @@ func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
 		if i == eseg {
 			srcEnd = eoff
 		} else {
-			srcEnd = meta.SegmentSize
+			srcEnd = meta.FileSize
 		}
 
-		segStart := i * meta.SegmentSize
+		segStart := i * meta.FileSize
 		dstStart := segStart + srcStart - off
 		dstEnd := segStart + srcEnd - off
 		data := p[dstStart:dstEnd]
@@ -382,7 +382,7 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 
 	// additional space required for write
 	// allocated in current go routine (before write)
-	total := meta.SegmentFiles * meta.SegmentSize
+	total := meta.Segments * meta.FileSize
 	if sz := off + size - total; sz > 0 {
 		err = f.ensureSpace(sz)
 		if err != nil {
@@ -391,10 +391,10 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 		}
 	}
 
-	sseg := off / meta.SegmentSize
-	soff := off % meta.SegmentSize
-	eseg := (size + off) / meta.SegmentSize
-	eoff := (size + off) % meta.SegmentSize
+	sseg := off / meta.FileSize
+	soff := off % meta.FileSize
+	eseg := (size + off) / meta.FileSize
+	eoff := (size + off) % meta.FileSize
 
 	for i := sseg; i <= eseg; i++ {
 		var writer io.WriterAt
@@ -409,10 +409,10 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 		if i == eseg {
 			dstEnd = eoff
 		} else {
-			dstEnd = meta.SegmentSize
+			dstEnd = meta.FileSize
 		}
 
-		segStart := i * meta.SegmentSize
+		segStart := i * meta.FileSize
 		srcStart := segStart + dstStart - off
 		srcEnd := segStart + dstEnd - off
 		data := p[srcStart:srcEnd]
@@ -493,15 +493,15 @@ func (f *file) shouldAllocate(sz int64) (do bool) {
 	}
 
 	meta := f.meta
-	total := meta.SegmentSize * meta.SegmentFiles
+	total := meta.FileSize * meta.Segments
 	return meta.DataSize+sz > total
 }
 
 // preallocateIfNeeded pre allocates new segment files if free space
-// goes below the threshold (AllocThreshold percentage of SegmentSize).
+// goes below the threshold (AllocThreshold percentage of FileSize).
 func (f *file) preallocateIfNeeded() {
 	meta := f.meta
-	thresh := meta.SegmentSize * AllocThreshold / 100
+	thresh := meta.FileSize * AllocThreshold / 100
 
 	// TODO Ensure only one preallocate go routine is run.
 	//      It is possible multiple go routines to pass the
@@ -552,20 +552,20 @@ func (f *file) ensureSpace(sz int64) (err error) {
 // One or more segment files will be created to hold sz bytes
 func (f *file) allocateSpace(sz int64) (err error) {
 	meta := f.meta
-	pathPrefix := path.Join(meta.Directory, meta.FilePrefix)
-	filesCount := sz / meta.SegmentSize
+	pathPrefix := path.Join(meta.Path, meta.Prefix)
+	filesCount := sz / meta.FileSize
 
-	if sz%meta.SegmentSize != 0 {
+	if sz%meta.FileSize != 0 {
 		filesCount++
 	}
 
 	var i int64
 	for i = 0; i < filesCount; i++ {
-		segID := meta.SegmentFiles + i
+		segID := meta.Segments + i
 		idStr := strconv.Itoa(int(segID))
 		fpath := pathPrefix + idStr
 
-		err = createFile(fpath, meta.SegmentSize)
+		err = createFile(fpath, meta.FileSize)
 		if err != nil {
 			Logger.Trace(err)
 			return err
@@ -574,9 +574,9 @@ func (f *file) allocateSpace(sz int64) (err error) {
 		var segment Segment
 
 		if f.mmapped {
-			segment, err = loadMMap(fpath, meta.SegmentSize)
+			segment, err = loadMMap(fpath, meta.FileSize)
 		} else {
-			segment, err = loadFile(fpath, meta.SegmentSize)
+			segment, err = loadFile(fpath, meta.FileSize)
 		}
 
 		if err != nil {
@@ -587,7 +587,7 @@ func (f *file) allocateSpace(sz int64) (err error) {
 		f.segments = append(f.segments, segment)
 	}
 
-	meta.SegmentFiles += filesCount
+	meta.Segments += filesCount
 
 	err = f.mdata.Save()
 	if err != nil {
@@ -602,15 +602,15 @@ func (f *file) allocateSpace(sz int64) (err error) {
 // It also ensures all segment files are valid.
 func (f *file) loadFiles() (err error) {
 	meta := f.meta
-	f.segments = make([]Segment, meta.SegmentFiles)
+	f.segments = make([]Segment, meta.Segments)
 
-	if meta.SegmentFiles > 0 {
+	if meta.Segments > 0 {
 		var i int64
-		for i = 0; i < meta.SegmentFiles; i++ {
+		for i = 0; i < meta.Segments; i++ {
 			istr := strconv.Itoa(int(i))
-			fpath := path.Join(meta.Directory, meta.FilePrefix+istr)
+			fpath := path.Join(meta.Path, meta.Prefix+istr)
 
-			segment, err := loadFile(fpath, meta.SegmentSize)
+			segment, err := loadFile(fpath, meta.FileSize)
 			if err != nil {
 				Logger.Trace(err)
 				closeFiles(f.segments)
@@ -628,15 +628,15 @@ func (f *file) loadFiles() (err error) {
 // segfile metadata. It also ensures all memory maps are valid.
 func (f *file) loadMMaps() (err error) {
 	meta := f.meta
-	f.segments = make([]Segment, meta.SegmentFiles)
+	f.segments = make([]Segment, meta.Segments)
 
-	if meta.SegmentFiles > 0 {
+	if meta.Segments > 0 {
 		var i int64
-		for i = 0; i < meta.SegmentFiles; i++ {
+		for i = 0; i < meta.Segments; i++ {
 			istr := strconv.Itoa(int(i))
-			fpath := path.Join(meta.Directory, meta.FilePrefix+istr)
+			fpath := path.Join(meta.Path, meta.Prefix+istr)
 
-			segment, err := loadMMap(fpath, meta.SegmentSize)
+			segment, err := loadMMap(fpath, meta.FileSize)
 			if err != nil {
 				Logger.Trace(err)
 				closeMMaps(f.segments)

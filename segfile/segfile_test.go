@@ -14,12 +14,12 @@ const (
 
 var (
 	OptionsSet = map[string]*Options{
-		"defaults": &Options{Directory: dir},
-		"prefixed": &Options{Directory: dir, FilePrefix: "test_"},
-		"filesize": &Options{Directory: dir, SegmentSize: 5 * 1024 * 1024},
-		"ro-files": &Options{Directory: dir, ReadOnly: true},
-		"rw-mmaps": &Options{Directory: dir, MemoryMap: true},
-		"ro-mmaps": &Options{Directory: dir, MemoryMap: true, ReadOnly: true},
+		"defaults": &Options{Path: dir},
+		"prefixed": &Options{Path: dir, Prefix: "test_"},
+		"filesize": &Options{Path: dir, FileSize: 5 * 1024 * 1024},
+		"ro-files": &Options{Path: dir, ReadOnly: true},
+		"rw-mmaps": &Options{Path: dir, MemoryMap: true},
+		"ro-mmaps": &Options{Path: dir, MemoryMap: true, ReadOnly: true},
 	}
 )
 
@@ -43,8 +43,8 @@ func TNewWithOptions(t *testing.T, o *Options) {
 	}
 
 	sf, err = New(&Options{
-		Directory:  o.Directory,
-		FilePrefix: o.FilePrefix,
+		Path:   o.Path,
+		Prefix: o.Prefix,
 	})
 
 	if err != nil {
@@ -84,7 +84,7 @@ func TWriteAtReadAtWithOptions(t *testing.T, o *Options) {
 	}
 
 	p := []byte{1, 2, 3, 4}
-	off := o.SegmentSize - 2
+	off := o.FileSize - 2
 	n, err := sf.WriteAt(p, off)
 	if err != nil {
 		t.Fatal(err)
@@ -153,23 +153,23 @@ func BAllocateWithSegmentSize(b *testing.B, o *Options) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			sf.Grow(o.SegmentSize)
+			sf.Grow(o.FileSize)
 		}
 	})
 }
 
 func BenchmarkAllocateWithSegmentSize_10M(b *testing.B) {
-	o := &Options{Directory: dir, SegmentSize: 10 * 1024 * 1024}
+	o := &Options{Path: dir, FileSize: 10 * 1024 * 1024}
 	BAllocateWithSegmentSize(b, o)
 }
 
 func BenchmarkAllocateWithSegmentSize_20M(b *testing.B) {
-	o := &Options{Directory: dir, SegmentSize: 20 * 1024 * 1024}
+	o := &Options{Path: dir, FileSize: 20 * 1024 * 1024}
 	BAllocateWithSegmentSize(b, o)
 }
 
 func BenchmarkAllocateWithSegmentSize_100M(b *testing.B) {
-	o := &Options{Directory: dir, SegmentSize: 100 * 1024 * 1024}
+	o := &Options{Path: dir, FileSize: 100 * 1024 * 1024}
 	BAllocateWithSegmentSize(b, o)
 }
 
@@ -207,31 +207,31 @@ func BWriteWithPayloadSize(b *testing.B, o *Options, size int) {
 }
 
 func BenchmarkFileWriteWithPayloadSize_10B(b *testing.B) {
-	o := &Options{Directory: dir}
+	o := &Options{Path: dir}
 	BWriteWithPayloadSize(b, o, 10)
 }
 
 func BenchmarkFileWriteWithPayloadSize_20B(b *testing.B) {
-	o := &Options{Directory: dir}
+	o := &Options{Path: dir}
 	BWriteWithPayloadSize(b, o, 20)
 }
 
 func BenchmarkFileWriteWithPayloadSize_100B(b *testing.B) {
-	o := &Options{Directory: dir}
+	o := &Options{Path: dir}
 	BWriteWithPayloadSize(b, o, 100)
 }
 
 func BenchmarkMMapWriteWithPayloadSize_10B(b *testing.B) {
-	o := &Options{Directory: dir, MemoryMap: true}
+	o := &Options{Path: dir, MemoryMap: true}
 	BWriteWithPayloadSize(b, o, 10)
 }
 
 func BenchmarkMMapWriteWithPayloadSize_20B(b *testing.B) {
-	o := &Options{Directory: dir, MemoryMap: true}
+	o := &Options{Path: dir, MemoryMap: true}
 	BWriteWithPayloadSize(b, o, 20)
 }
 
 func BenchmarkMMapWriteWithPayloadSize_100B(b *testing.B) {
-	o := &Options{Directory: dir, MemoryMap: true}
+	o := &Options{Path: dir, MemoryMap: true}
 	BWriteWithPayloadSize(b, o, 100)
 }

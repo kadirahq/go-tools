@@ -19,14 +19,14 @@ import proto "github.com/golang/protobuf/proto"
 var _ = proto.Marshal
 
 type Metadata struct {
-	// directory to store files
-	Directory string `protobuf:"bytes,1,opt" json:"Directory,omitempty"`
+	// path to store files
+	Path string `protobuf:"bytes,1,opt" json:"Path,omitempty"`
 	// files will be prefixed with this string
-	FilePrefix string `protobuf:"bytes,2,opt" json:"FilePrefix,omitempty"`
+	Prefix string `protobuf:"bytes,2,opt" json:"Prefix,omitempty"`
 	// size of a segment file
-	SegmentSize int64 `protobuf:"varint,3,opt" json:"SegmentSize,omitempty"`
+	FileSize int64 `protobuf:"varint,3,opt" json:"FileSize,omitempty"`
 	// available segment files
-	SegmentFiles int64 `protobuf:"varint,4,opt" json:"SegmentFiles,omitempty"`
+	Segments int64 `protobuf:"varint,4,opt" json:"Segments,omitempty"`
 	// number of bytes used
 	DataSize int64 `protobuf:"varint,5,opt" json:"DataSize,omitempty"`
 }
