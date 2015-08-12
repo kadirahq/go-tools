@@ -134,8 +134,8 @@ func TestWriteAtReadAt(t *testing.T) {
 }
 
 func BAllocateWithSegmentSize(b *testing.B, o *Options) {
-	if b.N > 10 {
-		b.N = 10
+	if b.N > 100 {
+		b.N = 100
 	}
 
 	err := os.RemoveAll(dir)
