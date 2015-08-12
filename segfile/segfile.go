@@ -286,6 +286,11 @@ func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
 		return 0, ErrParams
 	}
 
+	if len(p) == 0 {
+		// empty read
+		return 0, nil
+	}
+
 	meta := f.meta
 	szint := len(p)
 	szi64 := int64(szint)
@@ -371,6 +376,11 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 	if p == nil || off < 0 {
 		Logger.Trace(ErrParams)
 		return 0, ErrParams
+	}
+
+	if len(p) == 0 {
+		// empty write
+		return 0, nil
 	}
 
 	// pre-allocate in background go routine
