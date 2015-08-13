@@ -29,6 +29,21 @@ func TNewWithOptions(t *testing.T, o *Options) {
 		t.Fatal(err)
 	}
 
+	if o.ReadOnly {
+		sf, err := New(OptionsSet["rw-mmaps"])
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// run pre-alloc go routines
+		runtime.Gosched()
+
+		err = sf.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	sf, err := New(o)
 	if err != nil {
 		t.Fatal(err)
@@ -42,11 +57,8 @@ func TNewWithOptions(t *testing.T, o *Options) {
 		t.Fatal(err)
 	}
 
-	sf, err = New(&Options{
-		Path:   o.Path,
-		Prefix: o.Prefix,
-	})
-
+	// try opening with defaults
+	sf, err = New(OptionsSet["defaults"])
 	if err != nil {
 		t.Fatal(err)
 	}

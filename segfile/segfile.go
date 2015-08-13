@@ -209,6 +209,26 @@ func New(options *Options) (sf File, err error) {
 		options.FileSize = DefaultOptions.FileSize
 	}
 
+	if options.ReadOnly {
+		if err := os.Chdir(options.Path); err != nil {
+			Logger.Trace(err)
+			return nil, err
+		}
+
+		// make sure segment files exist for reading
+		mdpath := path.Join(options.Path, options.Prefix+MetadataFile)
+		f, err := os.OpenFile(mdpath, FileModeRead, 0644)
+		if err != nil {
+			Logger.Trace(err)
+			return nil, err
+		}
+
+		if err := f.Close(); err != nil {
+			Logger.Trace(err)
+			return nil, err
+		}
+	}
+
 	// make sure target directory exists
 	err = os.MkdirAll(options.Path, DirectoryPerm)
 	if err != nil {
