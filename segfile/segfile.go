@@ -148,6 +148,14 @@ type File interface {
 	// available space is not enough.
 	Grow(sz int64) (err error)
 
+	// Reset sets offsets to 0
+	Reset() (err error)
+
+	// Clear sets file size to 0
+	// Also set read-write offsets to zero.
+	// This will not free up space on disk.
+	Clear() (err error)
+
 	// Close cleans up everything and closes files
 	Close() (err error)
 }
@@ -474,6 +482,34 @@ func (f *file) Grow(sz int64) (err error) {
 	}
 
 	f.meta.DataSize += sz
+
+	err = f.mdata.Save()
+	if err != nil {
+		Logger.Trace(err)
+		return err
+	}
+
+	return nil
+}
+
+func (f *file) Reset() (err error) {
+	if f.closed {
+		Logger.Error(ErrClose)
+		return ErrClose
+	}
+
+	atomic.StoreInt64(&f.rwoffset, 0)
+	return nil
+}
+
+func (f *file) Clear() (err error) {
+	if f.closed {
+		Logger.Trace(ErrClose)
+		return ErrClose
+	}
+
+	atomic.StoreInt64(&f.rwoffset, 0)
+	atomic.StoreInt64(&f.meta.DataSize, 0)
 
 	err = f.mdata.Save()
 	if err != nil {
