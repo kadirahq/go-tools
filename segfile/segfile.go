@@ -427,13 +427,15 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 
 	// additional space required for write
 	// allocated in current go routine (before write)
-	total := meta.Segments * meta.FileSize
-	if sz := off + size - total; sz > 0 {
-		err = f.ensureSpace(sz)
-		if err != nil {
+	toGrow := off + size - meta.DataSize
+
+	if toGrow > 0 {
+		if err := f.Grow(toGrow); err != nil {
 			Logger.Trace(err)
 			return 0, err
 		}
+
+		meta = f.meta
 	}
 
 	sseg := off / meta.FileSize
@@ -501,7 +503,8 @@ func (f *file) Grow(sz int64) (err error) {
 		return err
 	}
 
-	f.meta.DataSize += sz
+	// increment the file size atomic
+	atomic.AddInt64(&f.meta.DataSize, sz)
 
 	err = f.mdata.Save()
 	if err != nil {
