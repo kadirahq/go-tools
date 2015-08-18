@@ -341,7 +341,7 @@ func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
 	if eseg < meta.Segments {
 		n = size
 	} else {
-		eseg = meta.Segments
+		eseg = meta.Segments - 1
 		eoff = meta.FileSize
 		n = int(meta.FileSize*(eseg-sseg) + meta.FileSize - soff)
 	}
