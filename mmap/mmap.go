@@ -5,8 +5,10 @@ import (
 	"io"
 	"os"
 	"path"
+	"reflect"
 	"sync"
 	"syscall"
+	"unsafe"
 
 	"github.com/kadirahq/go-tools/logger"
 )
@@ -88,6 +90,10 @@ type File interface {
 	// Locking a memory map can decrease initial page faults.
 	Lock() (err error)
 
+	// Sync synchronises the memory map with the file on disk
+	// This can ensure that all data is written to the disk
+	Sync() (err error)
+
 	// Unlock releases memory by not reserving parts of RAM of the file.
 	// The OS may use memory mapped data from the disk when done.
 	Unlock() (err error)
@@ -124,6 +130,12 @@ type mfile struct {
 
 	// io.Reader write offset
 	woffset int64
+
+	// slice header address
+	dhaddr uintptr
+
+	// slice header length
+	dhlen uintptr
 }
 
 // New creates a File struct with given options.
@@ -181,6 +193,8 @@ func New(options *Options) (mf File, err error) {
 		return nil, err
 	}
 
+	dhaddr, dhlen := sliceInfo(data)
+
 	mf = &mfile{
 		options: options,
 		data:    data,
@@ -188,6 +202,8 @@ func New(options *Options) (mf File, err error) {
 		file:    file,
 		rwmutx:  &sync.RWMutex{},
 		grmutx:  &sync.Mutex{},
+		dhaddr:  dhaddr,
+		dhlen:   dhlen,
 	}
 
 	return mf, nil
@@ -283,6 +299,19 @@ func (m *mfile) Unlock() (err error) {
 	return nil
 }
 
+func (m *mfile) Sync() (err error) {
+	m.rwmutx.Lock()
+	defer m.rwmutx.Unlock()
+
+	err = syncData(m.dhaddr, m.dhlen)
+	if err != nil {
+		Logger.Trace(err)
+		return err
+	}
+
+	return nil
+}
+
 func (m *mfile) Close() (err error) {
 	err = m.Unlock()
 	if err != nil {
@@ -374,6 +403,9 @@ func (m *mfile) grow(size int64) (err error) {
 		Logger.Trace(err)
 		return err
 	}
+
+	// update cached slice info
+	m.dhaddr, m.dhlen = sliceInfo(m.data)
 
 	if lock {
 		err := m.Lock()
@@ -490,4 +522,19 @@ func unlockData(data []byte) (err error) {
 	}
 
 	return nil
+}
+
+// syncData synchronizes data with file
+func syncData(addr, len uintptr) (err error) {
+	_, _, errno := syscall.Syscall(syscall.SYS_MSYNC, addr, len, syscall.MS_SYNC)
+	if errno != 0 {
+		return syscall.Errno(errno)
+	}
+
+	return nil
+}
+
+func sliceInfo(data []byte) (addr, len uintptr) {
+	dh := (*reflect.SliceHeader)(unsafe.Pointer(&data))
+	return dh.Data, uintptr(dh.Len)
 }
