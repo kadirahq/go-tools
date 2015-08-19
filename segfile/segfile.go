@@ -128,6 +128,9 @@ type Segment interface {
 	io.ReaderAt
 	io.WriterAt
 
+	// Sync synchronizes writes
+	Sync() (err error)
+
 	// Close closes the segment
 	Close() (err error)
 }
@@ -155,6 +158,9 @@ type File interface {
 	// Also set read-write offsets to zero.
 	// This will not free up space on disk.
 	Clear() (err error)
+
+	// Sync synchronizes writes
+	Sync() (err error)
 
 	// Close cleans up everything and closes files
 	Close() (err error)
@@ -538,6 +544,26 @@ func (f *file) Clear() (err error) {
 	if err != nil {
 		Logger.Trace(err)
 		return err
+	}
+
+	return nil
+}
+
+func (f *file) Sync() (err error) {
+	if f.closed {
+		Logger.Error(ErrClose)
+		return nil
+	}
+
+	f.almutex.Lock()
+	defer f.almutex.Unlock()
+
+	for _, seg := range f.segments {
+		err = seg.Sync()
+		if err != nil {
+			Logger.Trace(err)
+			return err
+		}
 	}
 
 	return nil
