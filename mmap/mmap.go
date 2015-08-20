@@ -84,7 +84,6 @@ type File interface {
 	Data() (d []byte)
 
 	// Reset sets io.Reader, io.Writer offsets to zero
-	// TODO check whether we need separate reset functions
 	Reset()
 
 	// Grow method grows the file by `size` number of bytes.
@@ -110,9 +109,6 @@ type File interface {
 }
 
 type mfile struct {
-	// options used when creating the memory map
-	options *Options
-
 	// byte slice which contains memory mapped data
 	data []byte
 
@@ -126,10 +122,7 @@ type mfile struct {
 	lock bool
 
 	// read/write mutex
-	rwmutx *sync.RWMutex
-
-	// growth mutex to control Grow calls
-	grmutx *sync.Mutex
+	rwmutx sync.RWMutex
 
 	// io.Reader/io.Writer offset
 	offset int64
@@ -143,22 +136,22 @@ type mfile struct {
 
 // New creates a File struct with given options.
 // Default values will be used for missing options.
-func New(options *Options) (mf File, err error) {
-	// validate options
-	if options == nil ||
-		options.Path == "" {
+func New(opts *Options) (mf File, err error) {
+	// validate opts
+	if opts == nil ||
+		opts.Path == "" {
 		Logger.Trace(ErrOptions)
 		return nil, ErrOptions
 	}
 
-	dpath := path.Dir(options.Path)
+	dpath := path.Dir(opts.Path)
 	err = os.MkdirAll(dpath, DirectoryPerm)
 	if err != nil {
 		Logger.Trace(err)
 		return nil, err
 	}
 
-	file, err := os.OpenFile(options.Path, FileMode, FilePerm)
+	file, err := os.OpenFile(opts.Path, FileMode, FilePerm)
 	if err != nil {
 		Logger.Trace(err)
 		return nil, err
@@ -176,18 +169,18 @@ func New(options *Options) (mf File, err error) {
 	}
 
 	size := finfo.Size()
-	if options.Size == 0 {
-		options.Size = size
+	if opts.Size == 0 {
+		opts.Size = size
 	}
 
-	if toGrow := options.Size - size; toGrow > 0 {
+	if toGrow := opts.Size - size; toGrow > 0 {
 		err = growFile(file, toGrow)
 		if err != nil {
 			Logger.Trace(err)
 			return nil, err
 		}
 
-		size = options.Size
+		size = opts.Size
 	}
 
 	data, err := mmapFile(file, 0, size)
@@ -199,14 +192,11 @@ func New(options *Options) (mf File, err error) {
 	dhaddr, dhlen := sliceInfo(data)
 
 	mf = &mfile{
-		options: options,
-		data:    data,
-		size:    size,
-		file:    file,
-		rwmutx:  &sync.RWMutex{},
-		grmutx:  &sync.Mutex{},
-		dhaddr:  dhaddr,
-		dhlen:   dhlen,
+		data:   data,
+		size:   size,
+		file:   file,
+		dhaddr: dhaddr,
+		dhlen:  dhlen,
 	}
 
 	return mf, nil
