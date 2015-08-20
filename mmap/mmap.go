@@ -77,6 +77,11 @@ type File interface {
 	// Size returns the size of the memory map
 	Size() (sz int64)
 
+	// Data returns underlying slice used with memory map.
+	// Using this slice is discouraged because it can be replaced
+	// when the memory map grows.
+	Data() (d []byte)
+
 	// Reset sets io.Reader, io.Writer offsets to zero
 	// TODO check whether we need separate reset functions
 	Reset()
@@ -253,6 +258,12 @@ func (m *mfile) Size() (sz int64) {
 	m.rwmutx.RLock()
 	defer m.rwmutx.RUnlock()
 	return m.size
+}
+
+func (m *mfile) Data() (d []byte) {
+	m.rwmutx.RLock()
+	defer m.rwmutx.RUnlock()
+	return m.data
 }
 
 func (m *mfile) Reset() {
