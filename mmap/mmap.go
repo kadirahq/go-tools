@@ -7,6 +7,7 @@ import (
 	"path"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 
@@ -130,11 +131,8 @@ type mfile struct {
 	// growth mutex to control Grow calls
 	grmutx *sync.Mutex
 
-	// io.Reader read offset
-	roffset int64
-
-	// io.Reader write offset
-	woffset int64
+	// io.Reader/io.Writer offset
+	offset int64
 
 	// slice header address
 	dhaddr uintptr
@@ -215,12 +213,12 @@ func New(options *Options) (mf File, err error) {
 }
 
 func (m *mfile) Read(p []byte) (n int, err error) {
-	m.rwmutx.RLock()
-	defer m.rwmutx.RUnlock()
+	m.rwmutx.Lock()
+	defer m.rwmutx.Unlock()
 
-	n, err = m.read(p, m.roffset)
+	n, err = m.read(p, m.offset)
 	if err == nil {
-		m.roffset += int64(n)
+		m.offset += int64(n)
 	} else {
 		Logger.Trace(err)
 	}
@@ -238,9 +236,9 @@ func (m *mfile) Write(p []byte) (n int, err error) {
 	m.rwmutx.Lock()
 	defer m.rwmutx.Unlock()
 
-	n, err = m.write(p, m.woffset)
+	n, err = m.write(p, m.offset)
 	if err == nil {
-		m.woffset += int64(n)
+		m.offset += int64(n)
 	} else {
 		Logger.Trace(err)
 	}
@@ -255,9 +253,7 @@ func (m *mfile) WriteAt(p []byte, off int64) (n int, err error) {
 }
 
 func (m *mfile) Size() (sz int64) {
-	m.rwmutx.RLock()
-	defer m.rwmutx.RUnlock()
-	return m.size
+	return atomic.LoadInt64(&m.size)
 }
 
 func (m *mfile) Data() (d []byte) {
@@ -267,11 +263,7 @@ func (m *mfile) Data() (d []byte) {
 }
 
 func (m *mfile) Reset() {
-	m.rwmutx.Lock()
-	defer m.rwmutx.Unlock()
-
-	m.roffset = 0
-	m.woffset = 0
+	atomic.StoreInt64(&m.offset, 0)
 }
 
 func (m *mfile) Grow(size int64) (err error) {
