@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 
 	"github.com/kadirahq/go-tools/logger"
-	"github.com/kadirahq/go-tools/mdata"
 	"github.com/kadirahq/go-tools/mmap"
 )
 
@@ -167,11 +166,8 @@ type File interface {
 }
 
 type file struct {
-	// metadata struct
+	// metadata struct and persister
 	meta *Metadata
-
-	// metadata helper
-	mdata mdata.Data
 
 	// slice of segments (files or mmaps)
 	segments []Segment
@@ -193,6 +189,15 @@ type file struct {
 
 	// io.Reader/io.Writer offset
 	rwoffset int64
+
+	// segment file prefix
+	fpfix string
+
+	// path to store files
+	fpath string
+
+	// segment file size
+	fsize int64
 }
 
 // New creates a File struct with given options.
@@ -233,45 +238,43 @@ func New(options *Options) (sf File, err error) {
 			Logger.Trace(err)
 			return nil, err
 		}
+	} else {
+		// make sure target directory exists
+		err = os.MkdirAll(options.Path, DirectoryPerm)
+		if err != nil {
+			Logger.Trace(err)
+			return nil, err
+		}
 	}
 
-	// make sure target directory exists
-	err = os.MkdirAll(options.Path, DirectoryPerm)
-	if err != nil {
-		Logger.Trace(err)
-		return nil, err
-	}
-
-	// create/load metadata
-	meta := &Metadata{
-		Path:     options.Path,
-		Prefix:   options.Prefix,
-		FileSize: options.FileSize,
-	}
-
+	var meta *Metadata
 	mdpath := path.Join(options.Path, options.Prefix+MetadataFile)
-	md, err := mdata.New(mdpath, meta, options.ReadOnly)
+
+	if options.ReadOnly {
+		meta, err = ReadMetadata(mdpath)
+	} else {
+		meta, err = NewMetadata(mdpath, options.FileSize)
+	}
+
 	if err != nil {
 		Logger.Trace(err)
 		return nil, err
 	}
 
 	// validate metadata file
-	if meta.Path != options.Path ||
-		meta.Prefix != options.Prefix ||
-		meta.FileSize < 0 ||
-		meta.Segments < 0 ||
-		meta.DataSize < 0 ||
-		meta.DataSize > meta.Segments*meta.FileSize {
+	if meta.Size() < 0 || meta.Segs() < 0 || meta.Used() < 0 ||
+		meta.Used() > meta.Segs()*meta.Size() {
 		Logger.Trace(ErrMData)
 		return nil, ErrMData
 	}
 
 	f := &file{
 		meta:    meta,
-		mdata:   md,
 		almutex: &sync.Mutex{},
 		ronly:   options.ReadOnly,
+		fpfix:   options.Prefix,
+		fpath:   options.Path,
+		fsize:   meta.Size(),
 	}
 
 	if options.MemoryMap {
@@ -328,28 +331,28 @@ func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
 	meta := f.meta
 	size := len(p)
 	sz64 := int64(size)
-	sseg := off / meta.FileSize
-	soff := off % meta.FileSize
-	eseg := (sz64 + off) / meta.FileSize
-	eoff := (sz64 + off) % meta.FileSize
+	sseg := off / f.fsize
+	soff := off % f.fsize
+	eseg := (sz64 + off) / f.fsize
+	eoff := (sz64 + off) % f.fsize
 
 	// if `eoff` is 0 there's no data to read from on `eseg`
 	// `eseg` will be unavailable unless it's already allocated
 	if eoff == 0 {
 		eseg--
-		eoff = meta.FileSize
+		eoff = f.fsize
 	}
 
-	if sseg >= meta.Segments {
+	if sseg >= meta.Segs() {
 		return 0, io.EOF
 	}
 
-	if eseg < meta.Segments {
+	if eseg < meta.Segs() {
 		n = size
 	} else {
-		eseg = meta.Segments - 1
-		eoff = meta.FileSize
-		n = int(meta.FileSize*(eseg-sseg) + meta.FileSize - soff)
+		eseg = meta.Segs() - 1
+		eoff = f.fsize
+		n = int(f.fsize*(eseg-sseg) + f.fsize - soff)
 	}
 
 	for i := sseg; i <= eseg; i++ {
@@ -365,10 +368,10 @@ func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
 		if i == eseg {
 			srcEnd = eoff
 		} else {
-			srcEnd = meta.FileSize
+			srcEnd = f.fsize
 		}
 
-		segStart := i * meta.FileSize
+		segStart := i * f.fsize
 		dstStart := segStart + srcStart - off
 		dstEnd := segStart + srcEnd - off
 		data := p[dstStart:dstEnd]
@@ -433,7 +436,7 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 
 	// additional space required for write
 	// allocated in current go routine (before write)
-	toGrow := off + size - meta.DataSize
+	toGrow := off + size - meta.Used()
 
 	if toGrow > 0 {
 		if err := f.Grow(toGrow); err != nil {
@@ -444,16 +447,16 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 		meta = f.meta
 	}
 
-	sseg := off / meta.FileSize
-	soff := off % meta.FileSize
-	eseg := (size + off) / meta.FileSize
-	eoff := (size + off) % meta.FileSize
+	sseg := off / f.fsize
+	soff := off % f.fsize
+	eseg := (size + off) / f.fsize
+	eoff := (size + off) % f.fsize
 
 	// if `eoff` is 0 there's no data to read from on `eseg`
 	// `eseg` will be unavailable unless it's already allocated
 	if eoff == 0 {
 		eseg--
-		eoff = meta.FileSize
+		eoff = f.fsize
 	}
 
 	for i := sseg; i <= eseg; i++ {
@@ -469,10 +472,10 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 		if i == eseg {
 			dstEnd = eoff
 		} else {
-			dstEnd = meta.FileSize
+			dstEnd = f.fsize
 		}
 
-		segStart := i * meta.FileSize
+		segStart := i * f.fsize
 		srcStart := segStart + dstStart - off
 		srcEnd := segStart + dstEnd - off
 		data := p[srcStart:srcEnd]
@@ -510,13 +513,12 @@ func (f *file) Grow(sz int64) (err error) {
 	}
 
 	// increment the file size atomic
-	atomic.AddInt64(&f.meta.DataSize, sz)
-
-	err = f.mdata.Save()
-	if err != nil {
-		Logger.Trace(err)
-		return err
-	}
+	meta := f.meta
+	meta.Lock()
+	used := meta.Used() + sz
+	meta.SetUsed(used)
+	meta.Unlock()
+	meta.Sync()
 
 	return nil
 }
@@ -538,13 +540,13 @@ func (f *file) Clear() (err error) {
 	}
 
 	atomic.StoreInt64(&f.rwoffset, 0)
-	atomic.StoreInt64(&f.meta.DataSize, 0)
 
-	err = f.mdata.Save()
-	if err != nil {
-		Logger.Trace(err)
-		return err
-	}
+	// set the file size to zero
+	meta := f.meta
+	meta.Lock()
+	meta.SetUsed(0)
+	meta.Unlock()
+	meta.Sync()
 
 	return nil
 }
@@ -580,7 +582,7 @@ func (f *file) Close() (err error) {
 
 	f.closed = true
 
-	err = f.mdata.Close()
+	err = f.meta.Close()
 	if err != nil {
 		Logger.Trace(err)
 		return err
@@ -602,15 +604,14 @@ func (f *file) shouldAllocate(sz int64) (do bool) {
 	}
 
 	meta := f.meta
-	total := meta.FileSize * meta.Segments
-	return meta.DataSize+sz > total
+	total := f.fsize * meta.Segs()
+	return meta.Used()+sz > total
 }
 
 // preallocateIfNeeded pre allocates new segment files if free space
 // goes below the threshold (AllocThreshold percentage of FileSize).
 func (f *file) preallocateIfNeeded() {
-	meta := f.meta
-	thresh := meta.FileSize * AllocThreshold / 100
+	thresh := f.fsize * AllocThreshold / 100
 
 	// TODO Ensure only one preallocate go routine is run.
 	//      It is possible multiple go routines to pass the
@@ -661,20 +662,20 @@ func (f *file) ensureSpace(sz int64) (err error) {
 // One or more segment files will be created to hold sz bytes
 func (f *file) allocateSpace(sz int64) (err error) {
 	meta := f.meta
-	pathPrefix := path.Join(meta.Path, meta.Prefix)
-	filesCount := sz / meta.FileSize
+	pathPrefix := path.Join(f.fpath, f.fpfix)
+	filesCount := sz / f.fsize
 
-	if sz%meta.FileSize != 0 {
+	if sz%f.fsize != 0 {
 		filesCount++
 	}
 
 	var i int64
 	for i = 0; i < filesCount; i++ {
-		segID := meta.Segments + i
+		segID := meta.Segs() + i
 		idStr := strconv.Itoa(int(segID))
 		fpath := pathPrefix + idStr
 
-		err = createFile(fpath, meta.FileSize)
+		err = createFile(fpath, f.fsize)
 		if err != nil {
 			Logger.Trace(err)
 			return err
@@ -683,9 +684,9 @@ func (f *file) allocateSpace(sz int64) (err error) {
 		var segment Segment
 
 		if f.mmapped {
-			segment, err = loadMMap(fpath, meta.FileSize)
+			segment, err = loadMMap(fpath, f.fsize)
 		} else {
-			segment, err = loadFile(fpath, meta.FileSize)
+			segment, err = loadFile(fpath, f.fsize)
 		}
 
 		if err != nil {
@@ -696,13 +697,10 @@ func (f *file) allocateSpace(sz int64) (err error) {
 		f.segments = append(f.segments, segment)
 	}
 
-	meta.Segments += filesCount
-
-	err = f.mdata.Save()
-	if err != nil {
-		Logger.Trace(err)
-		return err
-	}
+	meta.Lock()
+	meta.SetSegs(meta.Segs() + filesCount)
+	meta.Unlock()
+	meta.Sync()
 
 	return nil
 }
@@ -711,15 +709,15 @@ func (f *file) allocateSpace(sz int64) (err error) {
 // It also ensures all segment files are valid.
 func (f *file) loadFiles() (err error) {
 	meta := f.meta
-	f.segments = make([]Segment, meta.Segments)
+	f.segments = make([]Segment, meta.Segs())
 
-	if meta.Segments > 0 {
+	if meta.Segs() > 0 {
 		var i int64
-		for i = 0; i < meta.Segments; i++ {
+		for i = 0; i < meta.Segs(); i++ {
 			istr := strconv.Itoa(int(i))
-			fpath := path.Join(meta.Path, meta.Prefix+istr)
+			fpath := path.Join(f.fpath, f.fpfix+istr)
 
-			segment, err := loadFile(fpath, meta.FileSize)
+			segment, err := loadFile(fpath, f.fsize)
 			if err != nil {
 				Logger.Trace(err)
 				closeFiles(f.segments)
@@ -737,15 +735,15 @@ func (f *file) loadFiles() (err error) {
 // segfile metadata. It also ensures all memory maps are valid.
 func (f *file) loadMMaps() (err error) {
 	meta := f.meta
-	f.segments = make([]Segment, meta.Segments)
+	f.segments = make([]Segment, meta.Segs())
 
-	if meta.Segments > 0 {
+	if meta.Segs() > 0 {
 		var i int64
-		for i = 0; i < meta.Segments; i++ {
+		for i = 0; i < meta.Segs(); i++ {
 			istr := strconv.Itoa(int(i))
-			fpath := path.Join(meta.Path, meta.Prefix+istr)
+			fpath := path.Join(f.fpath, f.fpfix+istr)
 
-			segment, err := loadMMap(fpath, meta.FileSize)
+			segment, err := loadMMap(fpath, f.fsize)
 			if err != nil {
 				Logger.Trace(err)
 				closeMMaps(f.segments)
