@@ -168,6 +168,16 @@ func BAllocateWithSegmentSize(b *testing.B, o *Options) {
 			sf.Grow(o.FileSize)
 		}
 	})
+
+	err = sf.Close()
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	err = os.RemoveAll(dir)
+	if err != nil {
+		b.Fatal(err)
+	}
 }
 
 func BenchmarkAllocateWithSegmentSize_10M(b *testing.B) {
@@ -186,10 +196,6 @@ func BenchmarkAllocateWithSegmentSize_100M(b *testing.B) {
 }
 
 func BWriteWithPayloadSize(b *testing.B, o *Options, size int) {
-	if b.N > 10000 {
-		b.N = 10000
-	}
-
 	err := os.RemoveAll(dir)
 	if err != nil {
 		b.Fatal(err)
@@ -209,13 +215,23 @@ func BWriteWithPayloadSize(b *testing.B, o *Options, size int) {
 	}
 
 	b.ResetTimer()
-	b.SetParallelism(10)
+	b.SetParallelism(50000)
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			sf.Write(p)
 		}
 	})
+
+	err = sf.Close()
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	err = os.RemoveAll(dir)
+	if err != nil {
+		b.Fatal(err)
+	}
 }
 
 func BenchmarkFileWriteWithPayloadSize_10B(b *testing.B) {
