@@ -9,6 +9,7 @@ import (
 	fb "github.com/kadirahq/flatbuffers/go"
 	"github.com/kadirahq/go-tools/dmutex"
 	"github.com/kadirahq/go-tools/mmap"
+	"github.com/kadirahq/go-tools/secure"
 	"github.com/kadirahq/go-tools/segfile/metadata"
 )
 
@@ -47,8 +48,9 @@ type Metadata struct {
 	*metadata.Metadata
 
 	mmap   mmap.File
-	closed bool
+	closed *secure.Bool
 	dmutex *dmutex.Mutex
+	rdonly bool
 }
 
 // NewMetadata creates a new metadata file at fpath
@@ -79,6 +81,7 @@ func NewMetadata(fpath string, fsize int64) (mdata *Metadata, err error) {
 	mdata = &Metadata{
 		Metadata: meta,
 		mmap:     m,
+		closed:   secure.NewBool(false),
 		dmutex:   dmutex.New(),
 	}
 
@@ -100,6 +103,8 @@ func ReadMetadata(fpath string) (mdata *Metadata, err error) {
 	meta := metadata.GetRootAsMetadata(d, 0)
 	mdata = &Metadata{
 		Metadata: meta,
+		closed:   secure.NewBool(false),
+		rdonly:   true,
 	}
 
 	return mdata, nil
@@ -107,16 +112,18 @@ func ReadMetadata(fpath string) (mdata *Metadata, err error) {
 
 // Sync syncs the memory map to the disk
 func (m *Metadata) Sync() {
-	m.dmutex.Wait()
+	if !m.rdonly {
+		m.dmutex.Wait()
+	}
 }
 
 // Close closes metadata mmap file
 func (m *Metadata) Close() (err error) {
-	if m.closed {
+	if m.closed.Get() {
 		Logger.Error(ErrClose)
 		return nil
 	}
-	m.closed = true
+	m.closed.Set(true)
 
 	if m.mmap != nil {
 		err = m.mmap.Close()
@@ -130,7 +137,7 @@ func (m *Metadata) Close() (err error) {
 }
 
 func (m *Metadata) startSync() {
-	for !m.closed {
+	for !m.closed.Get() {
 		// do an mmap msync only if it's requested
 		m.dmutex.Flush(func() {
 			if err := m.mmap.Sync(); err != nil {

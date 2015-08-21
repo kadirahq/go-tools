@@ -11,6 +11,7 @@ import (
 
 	"github.com/kadirahq/go-tools/logger"
 	"github.com/kadirahq/go-tools/mmap"
+	"github.com/kadirahq/go-tools/secure"
 )
 
 const (
@@ -173,13 +174,13 @@ type file struct {
 	segments []Segment
 
 	// allocation mutex to control allocations
-	almutex *sync.Mutex
+	almutex sync.Mutex
 
 	// set to true when the segments are memory mapped
 	mmapped bool
 
 	// set to true when the file is closed
-	closed bool
+	closed *secure.Bool
 
 	// set to true when the file is read only
 	ronly bool
@@ -269,12 +270,12 @@ func New(options *Options) (sf File, err error) {
 	}
 
 	f := &file{
-		meta:    meta,
-		almutex: &sync.Mutex{},
-		ronly:   options.ReadOnly,
-		fpfix:   options.Prefix,
-		fpath:   options.Path,
-		fsize:   meta.Size(),
+		meta:   meta,
+		ronly:  options.ReadOnly,
+		fpfix:  options.Prefix,
+		fpath:  options.Path,
+		fsize:  meta.Size(),
+		closed: secure.NewBool(false),
 	}
 
 	if options.MemoryMap {
@@ -297,7 +298,7 @@ func New(options *Options) (sf File, err error) {
 }
 
 func (f *file) Read(p []byte) (n int, err error) {
-	if f.closed {
+	if f.closed.Get() {
 		Logger.Trace(ErrClosed)
 		return 0, ErrClosed
 	}
@@ -313,7 +314,7 @@ func (f *file) Read(p []byte) (n int, err error) {
 }
 
 func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
-	if f.closed {
+	if f.closed.Get() {
 		Logger.Trace(ErrClosed)
 		return 0, ErrClosed
 	}
@@ -391,7 +392,7 @@ func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
 }
 
 func (f *file) Write(p []byte) (n int, err error) {
-	if f.closed {
+	if f.closed.Get() {
 		Logger.Trace(ErrClosed)
 		return 0, ErrClosed
 	}
@@ -407,7 +408,7 @@ func (f *file) Write(p []byte) (n int, err error) {
 }
 
 func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
-	if f.closed {
+	if f.closed.Get() {
 		Logger.Trace(ErrClosed)
 		return 0, ErrClosed
 	}
@@ -501,7 +502,7 @@ func (f *file) Info() (meta *Metadata) {
 }
 
 func (f *file) Grow(sz int64) (err error) {
-	if f.closed {
+	if f.closed.Get() {
 		Logger.Trace(ErrClosed)
 		return ErrClosed
 	}
@@ -524,7 +525,7 @@ func (f *file) Grow(sz int64) (err error) {
 }
 
 func (f *file) Reset() (err error) {
-	if f.closed {
+	if f.closed.Get() {
 		Logger.Error(ErrClose)
 		return ErrClose
 	}
@@ -534,7 +535,7 @@ func (f *file) Reset() (err error) {
 }
 
 func (f *file) Clear() (err error) {
-	if f.closed {
+	if f.closed.Get() {
 		Logger.Trace(ErrClose)
 		return ErrClose
 	}
@@ -552,7 +553,7 @@ func (f *file) Clear() (err error) {
 }
 
 func (f *file) Sync() (err error) {
-	if f.closed {
+	if f.closed.Get() {
 		Logger.Error(ErrClose)
 		return nil
 	}
@@ -572,7 +573,7 @@ func (f *file) Sync() (err error) {
 }
 
 func (f *file) Close() (err error) {
-	if f.closed {
+	if f.closed.Get() {
 		Logger.Error(ErrClose)
 		return nil
 	}
@@ -580,7 +581,7 @@ func (f *file) Close() (err error) {
 	f.almutex.Lock()
 	defer f.almutex.Unlock()
 
-	f.closed = true
+	f.closed.Set(true)
 
 	err = f.meta.Close()
 	if err != nil {
@@ -599,7 +600,7 @@ func (f *file) Close() (err error) {
 
 // shouldAllocate checks whether there's free space to store sz bytes
 func (f *file) shouldAllocate(sz int64) (do bool) {
-	if f.closed {
+	if f.closed.Get() {
 		return false
 	}
 
