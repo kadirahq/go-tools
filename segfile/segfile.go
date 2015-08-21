@@ -174,7 +174,7 @@ type file struct {
 	segments []Segment
 
 	// allocation mutex to control allocations
-	almutex sync.Mutex
+	almutex sync.RWMutex
 
 	// set to true when the segments are memory mapped
 	mmapped bool
@@ -291,10 +291,6 @@ func New(options *Options) (sf File, err error) {
 		return nil, err
 	}
 
-	if !f.ronly {
-		f.preallocateIfNeeded()
-	}
-
 	return f, nil
 }
 
@@ -377,7 +373,12 @@ func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
 		dstStart := segStart + srcStart - off
 		dstEnd := segStart + srcEnd - off
 		data := p[dstStart:dstEnd]
+
+		// segments slice could be updated by another goroutine on allocation
+		// get a read-lock to make sure we're using the latest version
+		f.almutex.RLock()
 		reader = f.segments[i]
+		f.almutex.RUnlock()
 
 		n, err := reader.ReadAt(data, srcStart)
 		if err != nil {
@@ -435,8 +436,8 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 	// go routine started only if necessary
 	f.preallocateIfNeeded()
 
-	meta := f.meta
 	size := int64(len(p))
+	meta := f.meta
 
 	// additional space required for write
 	// allocated in current go routine (before write)
@@ -447,8 +448,6 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 			Logger.Trace(err)
 			return 0, err
 		}
-
-		meta = f.meta
 	}
 
 	sseg := off / f.fsize
@@ -483,7 +482,12 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 		srcStart := segStart + dstStart - off
 		srcEnd := segStart + dstEnd - off
 		data := p[srcStart:srcEnd]
+
+		// segments slice could be updated by another goroutine on allocation
+		// get a read-lock to make sure we're using the latest version
+		f.almutex.RLock()
 		writer = f.segments[i]
+		f.almutex.RUnlock()
 
 		num, err := writer.WriteAt(data, dstStart)
 		if err != nil {
@@ -560,9 +564,6 @@ func (f *file) Sync() (err error) {
 		Logger.Error(ErrClose)
 		return nil
 	}
-
-	f.almutex.Lock()
-	defer f.almutex.Unlock()
 
 	for _, seg := range f.segments {
 		err = seg.Sync()
