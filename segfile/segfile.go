@@ -179,14 +179,14 @@ type file struct {
 	// set to true when the segments are memory mapped
 	mmapped bool
 
-	// set to true when the file is closed
-	closed *secure.Bool
-
 	// set to true when the file is read only
 	ronly bool
 
 	// set to true while a pre allocation is running
-	prealloc bool
+	alloc *secure.Bool
+
+	// set to true when the file is closed
+	closed *secure.Bool
 
 	// io.Reader/io.Writer offset
 	rwoffset int64
@@ -275,6 +275,7 @@ func New(options *Options) (sf File, err error) {
 		fpfix:  options.Prefix,
 		fpath:  options.Path,
 		fsize:  meta.Size(),
+		alloc:  secure.NewBool(false),
 		closed: secure.NewBool(false),
 	}
 
@@ -397,13 +398,15 @@ func (f *file) Write(p []byte) (n int, err error) {
 		return 0, ErrClosed
 	}
 
-	n, err = f.WriteAt(p, f.rwoffset)
+	off := atomic.LoadInt64(&f.rwoffset)
+	n, err = f.WriteAt(p, off)
 	if err != nil {
 		Logger.Trace(err)
 		return 0, err
 	}
 
-	atomic.AddInt64(&f.rwoffset, int64(n))
+	n64 := int64(n)
+	atomic.AddInt64(&f.rwoffset, n64)
 	return n, nil
 }
 
@@ -605,8 +608,11 @@ func (f *file) shouldAllocate(sz int64) (do bool) {
 	}
 
 	meta := f.meta
-	total := f.fsize * meta.Segs()
-	return meta.Used()+sz > total
+	meta.RLock()
+	defer meta.RUnlock()
+
+	segs, used := meta.Segs(), meta.Used()
+	return used+sz > (f.fsize * segs)
 }
 
 // preallocateIfNeeded pre allocates new segment files if free space
@@ -624,17 +630,17 @@ func (f *file) preallocateIfNeeded() {
 	//      starting an additional very lightweight go routine.
 
 	// Return if a pre-allocation is already in progress.
-	if !f.prealloc && f.shouldAllocate(thresh) {
+	if !f.alloc.Get() && f.shouldAllocate(thresh) {
 		// set allocing to true before starting pre allocation goroutine
 		// starting many unnecessary go routines can be extremely costly
-		f.prealloc = true
+		f.alloc.Set(true)
 
 		go func() {
 			if err := f.ensureSpace(thresh); err != nil {
 				Logger.Error(err)
 			}
 
-			f.prealloc = false
+			f.alloc.Set(false)
 		}()
 	}
 }
