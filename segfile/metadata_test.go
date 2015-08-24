@@ -128,7 +128,7 @@ func BenchmarkMetadataWrite(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	b.SetParallelism(10000)
+	b.SetParallelism(1000)
 	b.RunParallel(func(pb *testing.PB) {
 		var i int64
 		for i = 0; pb.Next(); i++ {
@@ -157,7 +157,7 @@ func BenchmarkMetadataWriteAndSync(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	b.SetParallelism(10000)
+	b.SetParallelism(1000)
 	b.RunParallel(func(pb *testing.PB) {
 		var i int64
 		for i = 0; pb.Next(); i++ {
