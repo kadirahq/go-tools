@@ -11,9 +11,6 @@ var (
 
 	// ErrRead is returned when bytes read is not equal to data size
 	ErrRead = errors.New("bytes read != data size")
-
-	// chunkData is a 1MB size slice of zeroes
-	chunkData = make([]byte, 1024*1024)
 )
 
 // EnsureDir makes sure that a directory exists at path
@@ -38,7 +35,10 @@ func EnsureFile(fpath string, sz int64) (err error) {
 
 	initSize := finfo.Size()
 	toAppend := sz - initSize
-	chunkSize := int64(len(chunkData))
+
+	// chunkData is a 1MB size slice of zeroes
+	chunkSize := int64(1024 * 1024)
+	chunkData := make([]byte, chunkSize)
 
 	// number of chunks to write
 	chunks := toAppend / chunkSize
