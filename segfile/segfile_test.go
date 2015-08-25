@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"reflect"
-	"runtime"
 	"testing"
 )
 
@@ -35,9 +34,6 @@ func TNewWithOptions(t *testing.T, o *Options) {
 			t.Fatal(err)
 		}
 
-		// run pre-alloc go routines
-		runtime.Gosched()
-
 		err = sf.Close()
 		if err != nil {
 			t.Fatal(err)
@@ -49,8 +45,9 @@ func TNewWithOptions(t *testing.T, o *Options) {
 		t.Fatal(err)
 	}
 
-	// run pre-alloc go routines
-	runtime.Gosched()
+	if sf.Size() != 0 {
+		t.Fatal("size != 0")
+	}
 
 	err = sf.Close()
 	if err != nil {
@@ -61,6 +58,10 @@ func TNewWithOptions(t *testing.T, o *Options) {
 	sf, err = New(OptionsSet["defaults"])
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	if sf.Size() != 0 {
+		t.Fatal("size != 0")
 	}
 
 	err = sf.Close()
@@ -95,6 +96,10 @@ func TWriteAtReadAtWithOptions(t *testing.T, o *Options) {
 		t.Fatal(err)
 	}
 
+	if sf.Size() != 0 {
+		t.Fatal("size != 0")
+	}
+
 	p := []byte{1, 2, 3, 4}
 	off := o.FileSize - 2
 	n, err := sf.WriteAt(p, off)
@@ -102,6 +107,11 @@ func TWriteAtReadAtWithOptions(t *testing.T, o *Options) {
 		t.Fatal(err)
 	} else if n != 4 {
 		t.Fatal("write error")
+	}
+
+	endoff := o.FileSize - 2 + int64(len(p))
+	if sf.Size() != endoff {
+		t.Fatal("size !=", endoff)
 	}
 
 	err = sf.Close()
@@ -113,6 +123,10 @@ func TWriteAtReadAtWithOptions(t *testing.T, o *Options) {
 	sf, err = New(o)
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	if sf.Size() != endoff {
+		t.Fatal("size !=", endoff)
 	}
 
 	r := make([]byte, 4)
@@ -262,4 +276,73 @@ func BenchmarkMMapWriteWithPayloadSize_20B(b *testing.B) {
 func BenchmarkMMapWriteWithPayloadSize_100B(b *testing.B) {
 	o := &Options{Path: dir, MemoryMap: true}
 	BWriteWithPayloadSize(b, o, 100)
+}
+
+func BWriteAtWithPayloadSize(b *testing.B, o *Options, size int) {
+	err := os.RemoveAll(dir)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	sf, err := New(o)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	p := make([]byte, size)
+	n, err := sf.WriteAt(p, 0)
+	if err != nil {
+		b.Fatal(err)
+	} else if n != size {
+		b.Fatal("write error")
+	}
+
+	b.ResetTimer()
+	b.SetParallelism(50000)
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			sf.WriteAt(p, 0)
+		}
+	})
+
+	err = sf.Close()
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	err = os.RemoveAll(dir)
+	if err != nil {
+		b.Fatal(err)
+	}
+}
+
+func BenchmarkFileWriteAtWithPayloadSize_10B(b *testing.B) {
+	o := &Options{Path: dir}
+	BWriteAtWithPayloadSize(b, o, 10)
+}
+
+func BenchmarkFileWriteAtWithPayloadSize_20B(b *testing.B) {
+	o := &Options{Path: dir}
+	BWriteAtWithPayloadSize(b, o, 20)
+}
+
+func BenchmarkFileWriteAtWithPayloadSize_100B(b *testing.B) {
+	o := &Options{Path: dir}
+	BWriteAtWithPayloadSize(b, o, 100)
+}
+
+func BenchmarkMMapWriteAtWithPayloadSize_10B(b *testing.B) {
+	o := &Options{Path: dir, MemoryMap: true}
+	BWriteAtWithPayloadSize(b, o, 10)
+}
+
+func BenchmarkMMapWriteAtWithPayloadSize_20B(b *testing.B) {
+	o := &Options{Path: dir, MemoryMap: true}
+	BWriteAtWithPayloadSize(b, o, 20)
+}
+
+func BenchmarkMMapWriteAtWithPayloadSize_100B(b *testing.B) {
+	o := &Options{Path: dir, MemoryMap: true}
+	BWriteAtWithPayloadSize(b, o, 100)
 }
