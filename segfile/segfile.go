@@ -7,6 +7,7 @@ import (
 	"path"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/kadirahq/go-tools/fsutils"
 	"github.com/kadirahq/go-tools/logger"
@@ -92,12 +93,10 @@ var defaults = &Options{
 type Segment interface {
 	io.ReaderAt
 	io.WriterAt
+	io.Closer
 
 	// Sync synchronizes writes
 	Sync() (err error)
-
-	// Close closes the segment
-	Close() (err error)
 }
 
 // File is similar to os.File but data is spread across many files.
@@ -107,6 +106,8 @@ type File interface {
 	io.Writer
 	io.ReaderAt
 	io.WriterAt
+	io.Seeker
+	io.Closer
 
 	// Size returns pseudo segment file size.
 	// This value will be usually less than the amount allocated on disk
@@ -127,9 +128,6 @@ type File interface {
 
 	// Sync synchronizes writes
 	Sync() (err error)
-
-	// Close cleans up everything and closes files
-	Close() (err error)
 }
 
 type file struct {
@@ -451,6 +449,29 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 	}
 
 	return n, nil
+}
+
+func (f *file) Seek(offset int64, whence int) (off int64, err error) {
+	// TODO return correct error if offset < 0
+
+	f.iomutex.Lock()
+	defer f.iomutex.Unlock()
+
+	switch whence {
+	case 0:
+		off = offset
+		atomic.StoreInt64(&f.offset, offset)
+	case 1:
+		off = atomic.AddInt64(&f.offset, offset)
+	case 2:
+		meta := f.meta
+		meta.RLock()
+		used := meta.Used()
+		meta.RUnlock()
+		off = atomic.AddInt64(&f.offset, offset+used)
+	}
+
+	return off, nil
 }
 
 func (f *file) Size() (sz int64) {
