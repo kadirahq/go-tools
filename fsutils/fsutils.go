@@ -3,14 +3,22 @@ package fsutils
 import (
 	"errors"
 	"os"
+
+	goerr "github.com/go-errors/errors"
 )
 
 var (
-	// ErrWrite is returned when bytes written is not equal to data size
-	ErrWrite = errors.New("bytes written != data size")
+	// ErrWriteSz is returned when bytes written is not equal to data size
+	ErrWriteSz = errors.New("bytes written != data size")
 
-	// ErrRead is returned when bytes read is not equal to data size
-	ErrRead = errors.New("bytes read != data size")
+	// ErrReadSz is returned when bytes read is not equal to data size
+	ErrReadSz = errors.New("bytes read != data size")
+
+	// ErrFileDir is returned when a file was found instead of a directory
+	ErrFileDir = errors.New("expecting a directory, got a file")
+
+	// ErrDirFile is returned when a directory was found instead of a file
+	ErrDirFile = errors.New("expecting a file, got a directory")
 )
 
 // EnsureDir makes sure that a directory exists at path
@@ -25,12 +33,12 @@ func EnsureDir(dpath string) (err error) {
 func EnsureFile(fpath string, sz int64) (err error) {
 	file, err := os.OpenFile(fpath, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
-		return err
+		return goerr.Wrap(err, 0)
 	}
 
 	finfo, err := file.Stat()
 	if err != nil {
-		return err
+		return goerr.Wrap(err, 0)
 	}
 
 	initSize := finfo.Size()
@@ -50,7 +58,7 @@ func EnsureFile(fpath string, sz int64) (err error) {
 		if err != nil {
 			return err
 		} else if int64(n) != chunkSize {
-			return ErrWrite
+			return goerr.Wrap(ErrWriteSz, 0)
 		}
 	}
 
@@ -62,7 +70,7 @@ func EnsureFile(fpath string, sz int64) (err error) {
 	if err != nil {
 		return err
 	} else if int64(n) != toWrite {
-		return ErrWrite
+		return goerr.Wrap(ErrWriteSz, 0)
 	}
 
 	return nil
