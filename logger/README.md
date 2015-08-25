@@ -3,14 +3,11 @@
 A basic logger package which supports multiple levels of logging. Users can enable of disable log levels using the "log" environment variable. By default, logger logs **info** and **error** logs. Custom log levels can be added as required. More information can be found on [godoc](http://godoc.org/github.com/kadirahq/go-tools/logger).
 
 
-
 ## Installing
 
 ``` shell
 go get -u github.com/kadirahq/go-tools/logger
 ```
-
-
 
 ## Examples
 
@@ -43,3 +40,5 @@ func main() {
 	log.Print("lvl9001", "!!!")
 }
 ```
+
+![Example output]({{site.baseurl}}/logger/assets/logger-example.png)
