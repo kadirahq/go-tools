@@ -127,8 +127,8 @@ func (m *MMap) Close() (err error) {
 // speed up reads and writes. File type also implements many io interfaces
 // such as io.Reader, io.ReaderAt, io.Writer, io.WriterAt, io.Closer, io.Seeker
 type File struct {
+	MMap *MMap
 	file *os.File
-	data *MMap
 	path string
 	size int64
 	offs int64
@@ -157,8 +157,8 @@ func NewFile(path string, sz int64, lock bool) (f *File, err error) {
 	}
 
 	f = &File{
+		MMap: data,
 		file: file,
-		data: data,
 		path: path,
 		size: size,
 		lock: lock,
@@ -198,10 +198,10 @@ func (f *File) ReadAt(p []byte, off int64) (n int, err error) {
 	end := off + int64(len(p))
 
 	if end > fsz {
-		copy(p, f.data.Data[off:fsz])
+		copy(p, f.MMap.Data[off:fsz])
 		n, err = int(fsz-off), io.EOF
 	} else {
-		copy(p, f.data.Data[off:end])
+		copy(p, f.MMap.Data[off:end])
 		n, err = int(end-off), nil
 	}
 
@@ -228,7 +228,11 @@ func (f *File) Write(p []byte) (n int, err error) {
 	f.offs += int64(n)
 	f.rwmx.Unlock()
 
-	return n, goerr.Wrap(err, 0)
+	if err != nil {
+		return n, goerr.Wrap(err, 0)
+	}
+
+	return n, nil
 }
 
 // WriteAt function is used to implement the io.WriterAt interface. This will
@@ -244,7 +248,7 @@ func (f *File) WriteAt(p []byte, off int64) (n int, err error) {
 
 	if fsz := atomic.LoadInt64(&f.size); fsz > end {
 		f.iomx.RLock()
-		n = copy(f.data.Data[off:end], p)
+		n = copy(f.MMap.Data[off:end], p)
 		f.iomx.RUnlock()
 		return n, nil
 	}
@@ -260,7 +264,7 @@ func (f *File) WriteAt(p []byte, off int64) (n int, err error) {
 		return n, goerr.Wrap(fsutils.ErrWriteSz, 0)
 	}
 
-	if err := f.data.Close(); err != nil {
+	if err := f.MMap.Close(); err != nil {
 		return 0, goerr.Wrap(err, 0)
 	}
 
@@ -269,8 +273,8 @@ func (f *File) WriteAt(p []byte, off int64) (n int, err error) {
 		return 0, goerr.Wrap(err, 0)
 	}
 
-	f.data = data
-	f.size = int64(len(f.data.Data))
+	f.MMap = data
+	f.size = int64(len(f.MMap.Data))
 
 	return len(p), nil
 }
@@ -305,7 +309,7 @@ func (f *File) Sync() (err error) {
 	f.iomx.Lock()
 	defer f.iomx.Unlock()
 
-	if err := f.data.Sync(); err != nil {
+	if err := f.MMap.Sync(); err != nil {
 		return goerr.Wrap(err, 0)
 	}
 
@@ -326,7 +330,7 @@ func (f *File) Close() (err error) {
 
 	f.open.Set(false)
 
-	if err := f.data.Close(); err != nil {
+	if err := f.MMap.Close(); err != nil {
 		return goerr.Wrap(err, 0)
 	}
 
