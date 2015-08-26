@@ -3,6 +3,7 @@ package segfile
 import (
 	"io/ioutil"
 	"sync"
+	"time"
 
 	goerr "github.com/go-errors/errors"
 	fb "github.com/kadirahq/flatbuffers/go"
@@ -48,44 +49,60 @@ type Metadata struct {
 	memmap *mmap.File
 	closed *secure.Bool
 	syncfn *fnutils.Group
+	dosync *secure.Bool
 	rdonly bool
 }
 
 // NewMetadata creates a new metadata file at path
-func NewMetadata(path string, sz int64) (mdata *Metadata, err error) {
-	m, err := mmap.NewFile(path, 1, true)
+func NewMetadata(path string, sz int64) (m *Metadata, err error) {
+	mfile, err := mmap.NewFile(path, 1, true)
 	if err != nil {
 		return nil, goerr.Wrap(err, 0)
 	}
 
-	if m.Size() == 1 {
-		if n, err := m.Write(mdtemp); err != nil {
+	if mfile.Size() == 1 {
+		if n, err := mfile.Write(mdtemp); err != nil {
 			return nil, goerr.Wrap(err, 0)
 		} else if n != len(mdtemp) {
 			return nil, goerr.Wrap(fsutils.ErrWriteSz, 0)
 		}
 	}
 
-	data := m.MMap.Data
+	data := mfile.MMap.Data
 	meta := metadata.GetRootAsMetadata(data, 0)
 	if meta.Size() == 0 {
 		meta.SetSize(sz)
 	}
 
 	batch := fnutils.NewGroup(func() {
-		if err := m.Sync(); err != nil {
+		if err := mfile.Sync(); err != nil {
 			logger.Error(err, "sync metadata")
 		}
 	})
 
-	mdata = &Metadata{
+	m = &Metadata{
 		Metadata: meta,
-		memmap:   m,
+		memmap:   mfile,
 		closed:   secure.NewBool(false),
+		dosync:   secure.NewBool(false),
 		syncfn:   batch,
 	}
 
-	return mdata, nil
+	go func() {
+		for _ = range time.Tick(10 * time.Millisecond) {
+			if m.closed.Get() {
+				break
+			}
+
+			if m.dosync.Get() {
+				m.syncfn.Flush()
+			}
+
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	return m, nil
 }
 
 // ReadMetadata reads the file and parses metadata.
@@ -109,6 +126,7 @@ func ReadMetadata(path string) (mdata *Metadata, err error) {
 // Sync syncs the memory map to the disk
 func (m *Metadata) Sync() {
 	if !m.rdonly {
+		m.dosync.Set(true)
 		m.syncfn.Run()
 	}
 }
@@ -121,7 +139,7 @@ func (m *Metadata) Close() (err error) {
 
 	m.closed.Set(true)
 
-	if m.memmap != nil {
+	if !m.rdonly {
 		err = m.memmap.Close()
 		if err != nil {
 			return goerr.Wrap(err, 0)
