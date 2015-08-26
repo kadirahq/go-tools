@@ -41,4 +41,4 @@ func main() {
 }
 ```
 
-![Example output]({{site.baseurl}}/logger/assets/logger-example.png)
+![Example output](https://raw.githubusercontent.com/kadirahq/go-tools/master/logger/assets/logger-example.png)
