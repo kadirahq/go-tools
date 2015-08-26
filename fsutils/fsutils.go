@@ -32,6 +32,12 @@ var (
 	ErrDirFile = errors.New("expecting a file, got a directory")
 )
 
+// Syncer does some sort of a synchronization action. It may be writing
+// data to disk, synchronize data over network or something else.
+type Syncer interface {
+	Sync() (err error)
+}
+
 // EnsureDir makes sure that a directory exists at path
 // It will attempt to create a directory if not exists
 func EnsureDir(dpath string) (err error) {
