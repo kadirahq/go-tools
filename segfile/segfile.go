@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	goerr "github.com/go-errors/errors"
 	"github.com/kadirahq/go-tools/fsutils"
 	"github.com/kadirahq/go-tools/logger"
 	"github.com/kadirahq/go-tools/mmap"
@@ -16,26 +17,10 @@ import (
 )
 
 const (
-	// dirperm is the permission set for new directories
-	dirperm = 0755
-
-	// mdfilename is the name used for metadata files (ex. 'seg_mdata')
-	mdfilename = "mdata"
+	mdfile = "mdata"
 )
 
 var (
-	// ErrWrite is returned when bytes written is not equal to data size
-	ErrWrite = errors.New("bytes written != data size")
-
-	// ErrRead is returned when bytes read is not equal to data size
-	ErrRead = errors.New("bytes read != data size")
-
-	// ErrClose is returned when close is closed multiple times
-	ErrClose = errors.New("close called multiple times")
-
-	// ErrSegDir is returned when segment file is a directory
-	ErrSegDir = errors.New("segment file is a directory")
-
 	// ErrSegSz is returned when segment file size is different
 	ErrSegSz = errors.New("segment file size is different")
 
@@ -54,8 +39,8 @@ var (
 	// ErrROnly is returned when attempt to write on read-only segfile
 	ErrROnly = errors.New("segment file is read-only")
 
-	// ErrClosed is returned when using closed segfile
-	ErrClosed = errors.New("cannot use closed segfile")
+	// ErrClosed is returned when the resource is closed
+	ErrClosed = errors.New("cannot use closed resource")
 
 	// Logger logs stuff
 	Logger = logger.New("SEGFILE")
@@ -94,9 +79,7 @@ type Segment interface {
 	io.ReaderAt
 	io.WriterAt
 	io.Closer
-
-	// Sync synchronizes writes
-	Sync() (err error)
+	fsutils.Syncer
 }
 
 // File is similar to os.File but data is spread across many files.
@@ -108,6 +91,7 @@ type File interface {
 	io.WriterAt
 	io.Seeker
 	io.Closer
+	fsutils.Syncer
 
 	// Size returns pseudo segment file size.
 	// This value will be usually less than the amount allocated on disk
@@ -125,9 +109,6 @@ type File interface {
 	// Also set read-write offsets to zero.
 	// This will not free up space on disk.
 	Clear() (err error)
-
-	// Sync synchronizes writes
-	Sync() (err error)
 }
 
 type file struct {
@@ -169,8 +150,7 @@ func New(options *Options) (sf File, err error) {
 	if options == nil ||
 		options.Path == "" ||
 		options.FileSize < 0 {
-		Logger.Trace(ErrOpts)
-		return nil, ErrOpts
+		return nil, goerr.Wrap(ErrOpts, 0)
 	}
 
 	// set default values for options
@@ -184,12 +164,11 @@ func New(options *Options) (sf File, err error) {
 
 	var meta *Metadata
 	// path to metadata file
-	mdpath := path.Join(options.Path, options.Prefix+mdfilename)
+	mdpath := path.Join(options.Path, options.Prefix+mdfile)
 
 	if !options.ReadOnly {
 		if err := fsutils.EnsureDir(options.Path); err != nil {
-			Logger.Trace(err)
-			return nil, err
+			return nil, goerr.Wrap(err, 0)
 		}
 	}
 
@@ -200,15 +179,13 @@ func New(options *Options) (sf File, err error) {
 	}
 
 	if err != nil {
-		Logger.Trace(err)
-		return nil, err
+		return nil, goerr.Wrap(err, 0)
 	}
 
 	// validate metadata loaded from metadata file
 	size, segs, used := meta.Size(), meta.Segs(), meta.Used()
 	if size < 0 || segs < 0 || used < 0 || used > segs*size {
-		Logger.Trace(ErrMData)
-		return nil, ErrMData
+		return nil, goerr.Wrap(ErrMData, 0)
 	}
 
 	var segments []Segment
@@ -221,14 +198,12 @@ func New(options *Options) (sf File, err error) {
 	}
 
 	if err != nil {
-		Logger.Trace(err)
-		return nil, err
+		return nil, goerr.Wrap(err, 0)
 	}
 
 	// validate segments loaded from disk
 	if loaded := len(segments); loaded != int(segs) {
-		Logger.Trace(ErrCorrupt)
-		return nil, ErrCorrupt
+		return nil, goerr.Wrap(ErrCorrupt, 0)
 	}
 
 	f := &file{
@@ -256,8 +231,7 @@ func (f *file) Read(p []byte) (n int, err error) {
 
 	n, err = f.ReadAt(p, f.offset)
 	if err != nil {
-		Logger.Trace(err)
-		return 0, err
+		return 0, goerr.Wrap(err, 0)
 	}
 
 	f.offset += int64(n)
@@ -270,8 +244,7 @@ func (f *file) Write(p []byte) (n int, err error) {
 
 	n, err = f.WriteAt(p, f.offset)
 	if err != nil {
-		Logger.Trace(err)
-		return 0, err
+		return 0, goerr.Wrap(err, 0)
 	}
 
 	f.offset += int64(n)
@@ -280,13 +253,11 @@ func (f *file) Write(p []byte) (n int, err error) {
 
 func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
 	if f.closed.Get() {
-		Logger.Trace(ErrClosed)
-		return 0, ErrClosed
+		return 0, goerr.Wrap(ErrClosed, 0)
 	}
 
 	if p == nil || off < 0 {
-		Logger.Trace(ErrParam)
-		return 0, ErrParam
+		return 0, goerr.Wrap(ErrParam, 0)
 	}
 
 	size := len(p)
@@ -353,11 +324,9 @@ func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
 
 		n, err := reader.ReadAt(data, srcs)
 		if err != nil {
-			Logger.Trace(err)
-			return 0, err
+			return 0, goerr.Wrap(err, 0)
 		} else if n != len(data) {
-			Logger.Trace(ErrRead)
-			return 0, ErrRead
+			return 0, goerr.Wrap(fsutils.ErrReadSz, 0)
 		}
 	}
 
@@ -366,18 +335,15 @@ func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
 
 func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 	if f.closed.Get() {
-		Logger.Trace(ErrClosed)
-		return 0, ErrClosed
+		return 0, goerr.Wrap(ErrClosed, 0)
 	}
 
 	if f.ronly {
-		Logger.Trace(ErrROnly)
-		return 0, ErrROnly
+		return 0, goerr.Wrap(ErrROnly, 0)
 	}
 
 	if p == nil || off < 0 {
-		Logger.Trace(ErrParam)
-		return 0, ErrParam
+		return 0, goerr.Wrap(ErrParam, 0)
 	}
 
 	size := len(p)
@@ -390,8 +356,7 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 	dend := off + sz64
 
 	if err = f.ensureOffset(dend); err != nil {
-		Logger.Trace(err)
-		return 0, err
+		return 0, goerr.Wrap(err, 0)
 	}
 
 	segments := f.segments
@@ -429,11 +394,9 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 		writer = segments[i]
 
 		if n, err := writer.WriteAt(data, dsts); err != nil {
-			Logger.Trace(err)
-			return 0, err
+			return 0, goerr.Wrap(err, 0)
 		} else if n != len(data) {
-			Logger.Trace(ErrWrite)
-			return 0, ErrWrite
+			return 0, goerr.Wrap(fsutils.ErrWriteSz, 0)
 		}
 
 		n = int(srce)
@@ -490,8 +453,7 @@ func (f *file) Size() (sz int64) {
 
 func (f *file) Grow(sz int64) (err error) {
 	if f.closed.Get() {
-		Logger.Trace(ErrClosed)
-		return ErrClosed
+		return goerr.Wrap(ErrClosed, 0)
 	}
 
 	// Calculate the file size after growing and make sure that the offset
@@ -514,8 +476,7 @@ func (f *file) Grow(sz int64) (err error) {
 
 func (f *file) Reset() (err error) {
 	if f.closed.Get() {
-		Logger.Trace(ErrClosed)
-		return ErrClosed
+		return goerr.Wrap(ErrClosed, 0)
 	}
 
 	f.iomutex.Lock()
@@ -526,8 +487,7 @@ func (f *file) Reset() (err error) {
 
 func (f *file) Clear() (err error) {
 	if f.closed.Get() {
-		Logger.Trace(ErrClosed)
-		return ErrClosed
+		return goerr.Wrap(ErrClosed, 0)
 	}
 
 	// clear io.Reader/io.Writer offset
@@ -546,15 +506,13 @@ func (f *file) Clear() (err error) {
 
 func (f *file) Sync() (err error) {
 	if f.closed.Get() {
-		Logger.Error(ErrClose)
-		return nil
+		return goerr.Wrap(ErrClosed, 0)
 	}
 
 	for _, seg := range f.segments {
 		err = seg.Sync()
 		if err != nil {
-			Logger.Trace(err)
-			return err
+			return goerr.Wrap(err, 0)
 		}
 	}
 
@@ -563,8 +521,7 @@ func (f *file) Sync() (err error) {
 
 func (f *file) Close() (err error) {
 	if f.closed.Get() {
-		Logger.Error(ErrClose)
-		return nil
+		return goerr.Wrap(ErrClosed, 0)
 	}
 
 	// this will stop future requests
@@ -574,8 +531,7 @@ func (f *file) Close() (err error) {
 	defer f.almutex.Unlock()
 
 	if err = f.meta.Close(); err != nil {
-		Logger.Trace(err)
-		return err
+		return goerr.Wrap(err, 0)
 	}
 
 	if f.mmap {
@@ -650,9 +606,9 @@ func (f *file) ensureOffset(off int64) (err error) {
 		fpath := bpath + strconv.Itoa(int(i))
 
 		// make sure the file exist and has enough file size
-		err = fsutils.EnsureFile(fpath, fsize)
+		_, err = fsutils.EnsureFile(fpath, fsize)
 		if err != nil {
-			return err
+			return goerr.Wrap(err, 0)
 		}
 
 		// load the segment
@@ -663,7 +619,7 @@ func (f *file) ensureOffset(off int64) (err error) {
 		}
 
 		if err != nil {
-			return err
+			return goerr.Wrap(err, 0)
 		}
 
 		segments[i] = segment
@@ -722,24 +678,20 @@ func loadFiles(segs, sz int64, bpath string) (segments []Segment, err error) {
 func loadFile(fpath string, sz int64) (file *os.File, err error) {
 	file, err = os.OpenFile(fpath, os.O_RDWR, 0644)
 	if err != nil {
-		Logger.Trace(err)
-		return nil, err
+		return nil, goerr.Wrap(err, 0)
 	}
 
 	finfo, err := file.Stat()
 	if err != nil {
-		Logger.Trace(err)
-		return nil, err
+		return nil, goerr.Wrap(err, 0)
 	}
 
 	if finfo.IsDir() {
-		Logger.Trace(ErrSegDir)
-		return nil, ErrSegDir
+		return nil, goerr.Wrap(fsutils.ErrDirFile, 0)
 	}
 
 	if finfo.Size() != sz {
-		Logger.Trace(ErrSegSz)
-		return nil, ErrSegSz
+		return nil, goerr.Wrap(ErrSegSz, 0)
 	}
 
 	return file, nil
@@ -789,22 +741,10 @@ func loadMMaps(segs, sz int64, bpath string) (segments []Segment, err error) {
 
 // loadMMap loads a memory map of a segment file at path and returns it
 // It also ensures that these mmaps are valid and has correct size.
-func loadMMap(fpath string, sz int64) (mfile mmap.File, err error) {
-	mopts := &mmap.Options{
-		Path: fpath,
-		Size: sz,
-	}
-
-	mfile, err = mmap.New(mopts)
+func loadMMap(fpath string, sz int64) (mfile *mmap.File, err error) {
+	mfile, err = mmap.NewFile(fpath, sz, true)
 	if err != nil {
-		Logger.Trace(err)
-		return nil, err
-	}
-
-	err = mfile.Lock()
-	if err != nil {
-		Logger.Trace(err)
-		return nil, err
+		return nil, goerr.Wrap(err, 0)
 	}
 
 	return mfile, nil

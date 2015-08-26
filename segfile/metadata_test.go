@@ -3,6 +3,8 @@ package segfile
 import (
 	"os"
 	"testing"
+
+	"github.com/kadirahq/go-tools/logger"
 )
 
 var (
@@ -11,11 +13,13 @@ var (
 
 func TestNewMetadata(t *testing.T) {
 	if err := os.RemoveAll(MDPath); err != nil {
+		logger.Error(err, "remove directory")
 		t.Fatal(err)
 	}
 
 	md, err := NewMetadata(MDPath, 100)
 	if err != nil {
+		logger.Error(err, "create metadata")
 		t.Fatal(err)
 	}
 
@@ -31,11 +35,13 @@ func TestNewMetadata(t *testing.T) {
 
 	err = md.Close()
 	if err != nil {
+		logger.Error(err, "close metadata")
 		t.Fatal(err)
 	}
 
 	md, err = NewMetadata(MDPath, 0)
 	if err != nil {
+		logger.Error(err, "create metadata")
 		t.Fatal(err)
 	}
 
@@ -65,11 +71,13 @@ func TestNewMetadata(t *testing.T) {
 
 	err = md.Close()
 	if err != nil {
+		logger.Error(err, "close metadata")
 		t.Fatal(err)
 	}
 
 	md, err = ReadMetadata(MDPath)
 	if err != nil {
+		logger.Error(err, "read metadata")
 		t.Fatal(err)
 	}
 
@@ -89,11 +97,13 @@ func TestNewMetadata(t *testing.T) {
 
 	err = md.Close()
 	if err != nil {
+		logger.Error(err, "close metadata")
 		t.Fatal(err)
 	}
 
 	md, err = ReadMetadata(MDPath)
 	if err != nil {
+		logger.Error(err, "read metadata")
 		t.Fatal(err)
 	}
 
@@ -109,10 +119,12 @@ func TestNewMetadata(t *testing.T) {
 
 	err = md.Close()
 	if err != nil {
+		logger.Error(err, "close metadata")
 		t.Fatal(err)
 	}
 
 	if err := os.RemoveAll(MDPath); err != nil {
+		logger.Error(err, "remove directory")
 		t.Fatal(err)
 	}
 }
