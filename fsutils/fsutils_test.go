@@ -39,7 +39,7 @@ func TestEnsureFile(t *testing.T) {
 		t.Fatal("file should not exist")
 	}
 
-	if err := EnsureFile(file, 1337); err != nil {
+	if _, err := EnsureFile(file, 1337); err != nil {
 		t.Fatal(err)
 	}
 

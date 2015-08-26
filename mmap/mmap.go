@@ -4,530 +4,339 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
 
-	"github.com/kadirahq/go-tools/logger"
+	goerr "github.com/go-errors/errors"
+	"github.com/kadirahq/go-tools/fsutils"
+	"github.com/kadirahq/go-tools/secure"
 )
 
 const (
-	// DirectoryPerm is the permission set for new directories
-	DirectoryPerm = 0755
-
-	// FileMode used when opening files for memory mapping
-	FileMode = os.O_CREATE | os.O_RDWR
-
-	// FilePerm is the permissions used when creating new files
-	FilePerm = 0644
-
-	// FileProt is the memory map prot parameter
-	FileProt = syscall.PROT_READ | syscall.PROT_WRITE
-
-	// FileFlag is the memory map flag parameter
-	FileFlag = syscall.MAP_SHARED
-
-	// ChunkSize is the number of bytes to write at a time.
-	// When creating new files, create it in small chunks.
-	ChunkSize = 1024 * 1024 * 10
+	flag = syscall.MAP_SHARED
+	prot = syscall.PROT_READ | syscall.PROT_WRITE
+	msa1 = syscall.MS_SYNC
 )
 
 var (
-	// ErrWrite is returned when bytes written not equal to data size
-	ErrWrite = errors.New("bytes written != data size")
-
-	// ErrOptions is returned when options have missing or invalid fields.
-	ErrOptions = errors.New("invalid or missing options")
-
-	// ErrFileDir is returned when file at path is a directory
-	ErrFileDir = errors.New("directory at target path")
-
-	// ChunkBytes is a ChunkSize size slice of zeroes
-	ChunkBytes = make([]byte, ChunkSize)
-
-	// Logger logs stuff
-	Logger = logger.New("MMAP")
+	// ErrClosed is returned when the resource is closed
+	ErrClosed = errors.New("cannot use closed resource")
 )
 
-// Options has parameters required for creating an `Index`
-type Options struct {
-	// memory map file path
-	// this field if required
-	Path string
-
-	// minimum size of the mmap file
-	// if not provided, file size will be used
-	Size int64
-
-	// TODO support mapping only a part of a file
-	// offset to start the memory map from
-	// Offset int64
-}
-
-// File is similar to os.File but all reads/writes are done through
-// memory maps. This can often lead to much faster reads/writes.
-type File interface {
-	io.Reader
-	io.ReaderAt
-	io.Writer
-	io.WriterAt
-
-	// Size returns the size of the memory map
-	Size() (sz int64)
-
-	// Data returns underlying slice used with memory map.
-	// Using this slice is discouraged because it can be replaced
-	// when the memory map grows.
-	Data() (d []byte)
-
-	// Reset sets io.Reader, io.Writer offsets to zero
-	Reset()
-
-	// Grow method grows the file by `size` number of bytes.
-	// Once it's done, the file will be re-mapped with added bytes.
-	Grow(size int64) (err error)
-
-	// Lock loads memory mapped data to the RAM and keeps them in RAM.
-	// If not done, the data will be kept on disk until required.
-	// Locking a memory map can decrease initial page faults.
-	Lock() (err error)
-
-	// Sync synchronises the memory map with the file on disk
-	// This can ensure that all data is written to the disk
-	Sync() (err error)
-
-	// Unlock releases memory by not reserving parts of RAM of the file.
-	// The OS may use memory mapped data from the disk when done.
-	Unlock() (err error)
-
-	// Close method unmaps data and closes the file.
-	// If the mmap is locked, it'll be unlocked first.
-	Close() (err error)
-}
-
-type mfile struct {
-	// byte slice which contains memory mapped data
-	data []byte
-
-	// current size of the memory mapped data
-	size int64
-
-	// map file handler used when growing the map
+// MMap is a struct which abstracts memory map system calls and provides a fast
+// and easy to use api. The MMap should be unmapped when not in use.
+type MMap struct {
+	Data []byte
 	file *os.File
-
-	// indicates whether the memory map is locked or not
 	lock bool
-
-	// read/write mutex
-	rwmutx sync.RWMutex
-
-	// io.Reader/io.Writer offset
-	offset int64
-
-	// slice header address
-	dhaddr uintptr
-
-	// slice header length
-	dhlen uintptr
+	hlen uintptr
+	hadr uintptr
+	open *secure.Bool
 }
 
-// New creates a File struct with given options.
-// Default values will be used for missing options.
-func New(opts *Options) (mf File, err error) {
-	// validate opts
-	if opts == nil ||
-		opts.Path == "" {
-		Logger.Trace(ErrOptions)
-		return nil, ErrOptions
-	}
-
-	dpath := path.Dir(opts.Path)
-	err = os.MkdirAll(dpath, DirectoryPerm)
+// NewMMap creates a new memory map struct. This struct contains map data and
+// other information needed to manipulate the memory map later.
+func NewMMap(path string, lock bool) (m *MMap, err error) {
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
-		Logger.Trace(err)
-		return nil, err
+		return nil, goerr.Wrap(err, 0)
 	}
 
-	file, err := os.OpenFile(opts.Path, FileMode, FilePerm)
+	info, err := file.Stat()
 	if err != nil {
-		Logger.Trace(err)
-		return nil, err
+		file.Close()
+		return nil, goerr.Wrap(err, 0)
 	}
 
-	finfo, err := file.Stat()
+	fd := file.Fd()
+	sz := info.Size()
+
+	data, err := syscall.Mmap(int(fd), 0, int(sz), prot, flag)
 	if err != nil {
-		Logger.Trace(err)
-		return nil, err
+		file.Close()
+		return nil, goerr.Wrap(err, 0)
 	}
 
-	if finfo.IsDir() {
-		Logger.Trace(ErrFileDir)
-		return nil, ErrFileDir
-	}
-
-	size := finfo.Size()
-	if opts.Size == 0 {
-		opts.Size = size
-	}
-
-	if toGrow := opts.Size - size; toGrow > 0 {
-		err = growFile(file, toGrow)
-		if err != nil {
-			Logger.Trace(err)
-			return nil, err
+	if lock {
+		if err := syscall.Mlock(data); err != nil {
+			// TODO handle failure to lock memory
 		}
-
-		size = opts.Size
 	}
 
-	data, err := mmapFile(file, 0, size)
-	if err != nil {
-		Logger.Trace(err)
-		return nil, err
+	// get slice header to get memory address and length
+	head := (*reflect.SliceHeader)(unsafe.Pointer(&data))
+
+	m = &MMap{
+		Data: data,
+		file: file,
+		lock: lock,
+		hadr: head.Data,
+		hlen: uintptr(head.Len),
+		open: secure.NewBool(true),
 	}
 
-	dhaddr, dhlen := sliceInfo(data)
+	return m, nil
+}
 
-	mf = &mfile{
-		data:   data,
-		size:   size,
-		file:   file,
-		dhaddr: dhaddr,
-		dhlen:  dhlen,
+// Sync synchronizes the memory map with the mapped file. This can be used to
+// ensure that all data is written to the disk successfully. Calling the Sync
+// method is necessary to survive OS kernel level panics and crashes.
+func (m *MMap) Sync() (err error) {
+	if !m.open.Get() {
+		return goerr.Wrap(ErrClosed, 0)
 	}
 
-	return mf, nil
-}
-
-func (m *mfile) Read(p []byte) (n int, err error) {
-	m.rwmutx.Lock()
-	defer m.rwmutx.Unlock()
-
-	n, err = m.read(p, m.offset)
-	if err == nil {
-		m.offset += int64(n)
-	} else {
-		Logger.Trace(err)
+	_, _, errno := syscall.Syscall(syscall.SYS_MSYNC, m.hadr, m.hlen, msa1)
+	if errno != 0 {
+		err := syscall.Errno(errno)
+		return goerr.Wrap(err, 0)
 	}
 
-	return n, err
+	return nil
 }
 
-func (m *mfile) ReadAt(p []byte, off int64) (n int, err error) {
-	m.rwmutx.RLock()
-	defer m.rwmutx.RUnlock()
-	return m.read(p, off)
-}
-
-func (m *mfile) Write(p []byte) (n int, err error) {
-	m.rwmutx.Lock()
-	defer m.rwmutx.Unlock()
-
-	n, err = m.write(p, m.offset)
-	if err == nil {
-		m.offset += int64(n)
-	} else {
-		Logger.Trace(err)
+// Close unmaps data and closes the file handler. Changes done to the memory
+// map will be synced to the disk before closing to prevent data loss.
+func (m *MMap) Close() (err error) {
+	if !m.open.Get() {
+		return goerr.Wrap(ErrClosed, 0)
 	}
 
-	return n, err
-}
+	if err := m.Sync(); err != nil {
+		return goerr.Wrap(err, 0)
+	}
 
-func (m *mfile) WriteAt(p []byte, off int64) (n int, err error) {
-	m.rwmutx.Lock()
-	defer m.rwmutx.Unlock()
-	return m.write(p, off)
-}
-
-func (m *mfile) Size() (sz int64) {
-	return atomic.LoadInt64(&m.size)
-}
-
-func (m *mfile) Data() (d []byte) {
-	m.rwmutx.RLock()
-	defer m.rwmutx.RUnlock()
-	return m.data
-}
-
-func (m *mfile) Reset() {
-	atomic.StoreInt64(&m.offset, 0)
-}
-
-func (m *mfile) Grow(size int64) (err error) {
-	m.rwmutx.Lock()
-	defer m.rwmutx.Unlock()
-	return m.grow(size)
-}
-
-func (m *mfile) Lock() (err error) {
 	if m.lock {
-		return nil
-	}
-
-	err = lockData(m.data)
-	if err != nil {
-		Logger.Trace(err)
-		return err
-	}
-
-	m.lock = true
-	return nil
-}
-
-func (m *mfile) Unlock() (err error) {
-	if !m.lock {
-		return nil
-	}
-
-	err = unlockData(m.data)
-	if err != nil {
-		Logger.Trace(err)
-		return err
-	}
-
-	m.lock = false
-	return nil
-}
-
-func (m *mfile) Sync() (err error) {
-	m.rwmutx.Lock()
-	defer m.rwmutx.Unlock()
-
-	err = syncData(m.dhaddr, m.dhlen)
-	if err != nil {
-		Logger.Trace(err)
-		return err
-	}
-
-	return nil
-}
-
-func (m *mfile) Close() (err error) {
-	err = m.Unlock()
-	if err != nil {
-		Logger.Trace(err)
-		return err
-	}
-
-	m.rwmutx.Lock()
-	defer m.rwmutx.Unlock()
-
-	err = unmapData(m.data)
-	if err != nil {
-		Logger.Trace(err)
-		return err
-	}
-
-	err = m.file.Close()
-	if err != nil {
-		Logger.Trace(err)
-		return err
-	}
-
-	return nil
-}
-
-func (m *mfile) read(p []byte, off int64) (n int, err error) {
-	var src []byte
-	var end = off + int64(len(p))
-
-	if end > m.size {
-		err = io.EOF
-		src = m.data[off:m.size]
-		n = int(m.size - off)
-	} else {
-		src = m.data[off:end]
-		n = int(end - off)
-	}
-
-	copy(p, src)
-	return n, err
-}
-
-func (m *mfile) write(p []byte, off int64) (n int, err error) {
-	var dst []byte
-	var end = off + int64(len(p))
-
-	if end > m.size {
-		toGrow := end - m.size
-		err = m.grow(toGrow)
-		if err != nil {
-			return 0, err
+		if err := syscall.Munlock(m.Data); err != nil {
+			return goerr.Wrap(err, 0)
 		}
 	}
 
-	dst = m.data[off:end]
-	n = int(end - off)
-	copy(dst, p)
+	if err := syscall.Munmap(m.Data); err != nil {
+		return goerr.Wrap(err, 0)
+	}
+
+	m.open.Set(false)
+	return nil
+}
+
+// File is similary to os.File but underneath it uses memory maps in order to
+// speed up reads and writes. File type also implements many io interfaces
+// such as io.Reader, io.ReaderAt, io.Writer, io.WriterAt, io.Closer, io.Seeker
+type File struct {
+	MMap *MMap
+	file *os.File
+	path string
+	size int64
+	offs int64
+	lock bool
+	open *secure.Bool
+	rwmx sync.RWMutex
+	iomx sync.RWMutex
+}
+
+// NewFile creates a new memory mapped file handler using the file on path.
+// If a size is given, it ensures that the file size is at least that value.
+func NewFile(path string, sz int64, lock bool) (f *File, err error) {
+	size, err := fsutils.EnsureFile(path, sz)
+	if err != nil {
+		return nil, goerr.Wrap(err, 0)
+	}
+
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return nil, goerr.Wrap(err, 0)
+	}
+
+	data, err := NewMMap(path, lock)
+	if err != nil {
+		return nil, goerr.Wrap(err, 0)
+	}
+
+	f = &File{
+		MMap: data,
+		file: file,
+		path: path,
+		size: size,
+		lock: lock,
+		open: secure.NewBool(true),
+	}
+
+	return f, nil
+}
+
+// Read function is used to implement the io.Reader interface. This can be used
+// to read data as a stream. Read is much slower than ReadAt because only one
+// read operation may run at a time. It uses ReadAt with stored offset.
+func (f *File) Read(p []byte) (n int, err error) {
+	if !f.open.Get() {
+		return 0, goerr.Wrap(ErrClosed, 0)
+	}
+
+	f.rwmx.Lock()
+	off := f.offs
+	n, err = f.ReadAt(p, off)
+	f.offs += int64(n)
+	f.rwmx.Unlock()
+
+	return n, goerr.Wrap(err, 0)
+}
+
+// ReadAt function is used to implement the io.ReaderAt interface. This will
+// copy as many bytes from the memory map (starting from offset) to slice.
+func (f *File) ReadAt(p []byte, off int64) (n int, err error) {
+	if !f.open.Get() {
+		return 0, goerr.Wrap(ErrClosed, 0)
+	}
+
+	f.iomx.RLock()
+
+	fsz := atomic.LoadInt64(&f.size)
+	end := off + int64(len(p))
+
+	if end > fsz {
+		copy(p, f.MMap.Data[off:fsz])
+		n, err = int(fsz-off), io.EOF
+	} else {
+		copy(p, f.MMap.Data[off:end])
+		n, err = int(end-off), nil
+	}
+
+	f.iomx.RUnlock()
+	if err != nil {
+		return n, goerr.Wrap(err, 0)
+	}
+
 	return n, nil
 }
 
-func (m *mfile) grow(size int64) (err error) {
-	lock := m.lock
-
-	if lock {
-		err := m.Unlock()
-		if err != nil {
-			Logger.Trace(err)
-			return err
-		}
-
-		m.lock = false
+// Write function is used to implement the io.Writer interface. This can be
+// used to write data as a stream. Write is much slower than WriteAt because
+// only one write operation may run at a time. It uses WriteAt with stored
+// offset. The file and memory map will grow automatically when necessary.
+func (f *File) Write(p []byte) (n int, err error) {
+	if !f.open.Get() {
+		return 0, goerr.Wrap(ErrClosed, 0)
 	}
 
-	err = unmapData(m.data)
+	f.rwmx.Lock()
+	off := f.offs
+	n, err = f.WriteAt(p, off)
+	f.offs += int64(n)
+	f.rwmx.Unlock()
+
 	if err != nil {
-		Logger.Trace(err)
-		return err
+		return n, goerr.Wrap(err, 0)
 	}
 
-	err = growFile(m.file, size)
+	return n, nil
+}
+
+// WriteAt function is used to implement the io.WriterAt interface. This will
+// copy as many bytes from the slice to the memory map. The file and the memory
+// map will grow automatically when necessary but it's recommended to allocate
+// required space before using in order to write faster (ex. segfile package).
+func (f *File) WriteAt(p []byte, off int64) (n int, err error) {
+	if !f.open.Get() {
+		return 0, goerr.Wrap(ErrClosed, 0)
+	}
+
+	end := off + int64(len(p))
+
+	if fsz := atomic.LoadInt64(&f.size); fsz > end {
+		f.iomx.RLock()
+		n = copy(f.MMap.Data[off:end], p)
+		f.iomx.RUnlock()
+		return n, nil
+	}
+
+	f.iomx.Lock()
+	defer f.iomx.Unlock()
+
+	// write the data directly to the file
+	// this will also increase the file size
+	if n, err := f.file.WriteAt(p, off); err != nil {
+		return n, goerr.Wrap(err, 0)
+	} else if n != len(p) {
+		return n, goerr.Wrap(fsutils.ErrWriteSz, 0)
+	}
+
+	if err := f.MMap.Close(); err != nil {
+		return 0, goerr.Wrap(err, 0)
+	}
+
+	data, err := NewMMap(f.path, f.lock)
 	if err != nil {
-		Logger.Trace(err)
-		return err
+		return 0, goerr.Wrap(err, 0)
 	}
 
-	m.size += size
-	m.data, err = mmapFile(m.file, 0, m.size)
-	if err != nil {
-		Logger.Trace(err)
-		return err
+	f.MMap = data
+	f.size = int64(len(f.MMap.Data))
+
+	return len(p), nil
+}
+
+// Size returns the size of the memory map. The file size can be different
+// if the mapped file is written by some other program.
+func (f *File) Size() (sz int64) {
+	f.iomx.RLock()
+	sz = f.size
+	f.iomx.RUnlock()
+	return sz
+}
+
+// Reset sets io.Reader/io.Writer offsets to the beginning of the file
+func (f *File) Reset() {
+	if !f.open.Get() {
+		return
 	}
 
-	// update cached slice info
-	m.dhaddr, m.dhlen = sliceInfo(m.data)
+	f.rwmx.Lock()
+	f.offs = 0
+	f.rwmx.Unlock()
+}
 
-	if lock {
-		err := m.Lock()
-		if err != nil {
-			Logger.Trace(err)
-			return err
-		}
+// Sync synchronizes the memory map with the mapped file. This can ensure that
+// all the data have been successfully and completely written to the disk.
+func (f *File) Sync() (err error) {
+	if !f.open.Get() {
+		return goerr.Wrap(ErrClosed, 0)
+	}
 
-		m.lock = true
+	f.iomx.Lock()
+	defer f.iomx.Unlock()
+
+	if err := f.MMap.Sync(); err != nil {
+		return goerr.Wrap(err, 0)
 	}
 
 	return nil
 }
 
-// growFile grows a file with `size` number of bytes.
-// `fsize` is the current file size in bytes.
-// empty bytes are appended to the end of the file.
-func growFile(file *os.File, size int64) (err error) {
-	finfo, err := file.Stat()
-	if err != nil {
-		Logger.Trace(err)
-		return err
+// Close releases all resources
+func (f *File) Close() (err error) {
+	// R/W operations
+	f.rwmx.Lock()
+	f.iomx.Lock()
+	defer f.rwmx.Unlock()
+	defer f.iomx.Unlock()
+
+	if !f.open.Get() {
+		return goerr.Wrap(ErrClosed, 0)
 	}
 
-	fsize := finfo.Size()
+	f.open.Set(false)
 
-	// number of complete chunks to write
-	chunksCount := size / ChunkSize
-
-	var i int64
-	for i = 0; i < chunksCount; i++ {
-		offset := fsize + ChunkSize*i
-		n, err := file.WriteAt(ChunkBytes, offset)
-		if err != nil {
-			Logger.Trace(err)
-			return err
-		} else if int64(n) != ChunkSize {
-			Logger.Trace(ErrWrite)
-			return ErrWrite
-		}
+	if err := f.MMap.Close(); err != nil {
+		return goerr.Wrap(err, 0)
 	}
 
-	// write all remaining bytes
-	toWrite := size % ChunkSize
-	zeroes := ChunkBytes[:toWrite]
-	offset := fsize + ChunkSize*chunksCount
-	n, err := file.WriteAt(zeroes, offset)
-	if err != nil {
-		Logger.Trace(err)
-		return err
-	} else if int64(n) != toWrite {
-		Logger.Trace(ErrWrite)
-		return ErrWrite
+	if err := f.file.Close(); err != nil {
+		return goerr.Wrap(err, 0)
 	}
 
 	return nil
-}
-
-// mmapFile creates a new memory map with the given file.
-// if the file size is zero, a memory cannot be created therefore
-// an empty byte array is returned instead (no errors returned).
-func mmapFile(file *os.File, from, to int64) (data []byte, err error) {
-	fd := int(file.Fd())
-	ln := int(to - from)
-
-	if ln == 0 {
-		data = make([]byte, 0, 0)
-		return data, nil
-	}
-
-	data, err = syscall.Mmap(fd, from, ln, FileProt, FileFlag)
-	if err != nil {
-		Logger.Trace(err)
-		return nil, err
-	}
-
-	return data, nil
-}
-
-// unmapData unmaps mapped data and releases memory
-// If the data size is zero, a map cannot exist
-// therefore assume no errors and return nil
-func unmapData(data []byte) (err error) {
-	if len(data) == 0 {
-		return nil
-	}
-
-	err = syscall.Munmap(data)
-	if err != nil {
-		Logger.Trace(err)
-		return err
-	}
-
-	return nil
-}
-
-// lockData locks data to physical memory
-func lockData(data []byte) (err error) {
-	err = syscall.Mlock(data)
-	if err != nil {
-		Logger.Trace(err)
-		return err
-	}
-
-	return nil
-}
-
-// unlockData releases locked memory
-func unlockData(data []byte) (err error) {
-	err = syscall.Munlock(data)
-	if err != nil {
-		Logger.Trace(err)
-		return err
-	}
-
-	return nil
-}
-
-// syncData synchronizes data with file
-func syncData(addr, len uintptr) (err error) {
-	_, _, errno := syscall.Syscall(syscall.SYS_MSYNC, addr, len, syscall.MS_SYNC)
-	if errno != 0 {
-		return syscall.Errno(errno)
-	}
-
-	return nil
-}
-
-func sliceInfo(data []byte) (addr, len uintptr) {
-	dh := (*reflect.SliceHeader)(unsafe.Pointer(&data))
-	return dh.Data, uintptr(dh.Len)
 }

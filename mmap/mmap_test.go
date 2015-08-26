@@ -1,175 +1,176 @@
 package mmap
 
 import (
-	"fmt"
 	"os"
 	"reflect"
 	"testing"
+
+	"github.com/kadirahq/go-tools/fsutils"
+	"github.com/kadirahq/go-tools/logger"
 )
 
-func TestNew(t *testing.T) {
-	fpath := "/tmp/m1"
-	defer os.Remove(fpath)
+var (
+	fpath = "/tmp/test-mmap-1"
+)
 
-	m, err := New(&Options{Path: fpath})
-	if err != nil {
+func TestNewMMap(t *testing.T) {
+	if err := os.RemoveAll(fpath); err != nil {
+		logger.Error(err, "delete file")
 		t.Fatal(err)
 	}
 
-	err = m.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestGrow(t *testing.T) {
-	fpath := "/tmp/m1"
-	defer os.Remove(fpath)
-
-	m, err := New(&Options{Path: fpath})
-	if err != nil {
+	if _, err := fsutils.EnsureFile(fpath, 10); err != nil {
+		logger.Error(err, "create file")
 		t.Fatal(err)
 	}
 
-	toGrow := int64(ChunkSize + 5)
-	err = m.Grow(toGrow)
+	mmap, err := NewMMap(fpath, true)
 	if err != nil {
+		logger.Error(err, "create mmap")
 		t.Fatal(err)
 	}
 
-	if m.Size() != toGrow {
-		t.Fatal("incorrect mmap size")
-	}
-}
-
-func TestAutoGrow(t *testing.T) {
-	fpath := "/tmp/m1"
-	defer os.Remove(fpath)
-
-	toGrow := int64(ChunkSize + 5)
-	m, err := New(&Options{Path: fpath, Size: toGrow})
-	if err != nil {
+	if err := mmap.Close(); err != nil {
+		logger.Error(err, "close mmap")
 		t.Fatal(err)
 	}
 
-	if m.Size() != toGrow {
-		t.Fatal("incorrect mmap size", m.Size(), toGrow)
-	}
-}
-
-func TestLockUnlock(t *testing.T) {
-	fpath := "/tmp/m1"
-	defer os.Remove(fpath)
-
-	m, err := New(&Options{Path: fpath})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = m.Lock()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = m.Unlock()
-	if err != nil {
+	if err := os.RemoveAll(fpath); err != nil {
+		logger.Error(err, "delete file")
 		t.Fatal(err)
 	}
 }
 
-func TestWriteRead(t *testing.T) {
-	fpath := "/tmp/m1"
-	defer os.Remove(fpath)
-
-	m, err := New(&Options{Path: fpath})
-	if err != nil {
+func TestWriteReadMMap(t *testing.T) {
+	if err := os.RemoveAll(fpath); err != nil {
+		logger.Error(err, "delete file")
 		t.Fatal(err)
 	}
 
-	err = m.Grow(4)
-	if err != nil {
+	if _, err := fsutils.EnsureFile(fpath, 10); err != nil {
+		logger.Error(err, "create file")
 		t.Fatal(err)
 	}
 
-	testData := []byte{1, 2, 3, 4}
-	n, err := m.WriteAt(testData, 0)
+	mmap, err := NewMMap(fpath, true)
 	if err != nil {
-		t.Fatal(err)
-	} else if n != 4 {
-		t.Fatal("write error")
-	}
-
-	err = m.Close()
-	if err != nil {
+		logger.Error(err, "create mmap")
 		t.Fatal(err)
 	}
 
-	m2, err := New(&Options{Path: fpath})
-	if err != nil {
+	zeroes := []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	number := []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+	if !reflect.DeepEqual(mmap.Data, zeroes) {
+		t.Fatal("mmap data should be empty")
+	}
+
+	copy(mmap.Data, number)
+	if !reflect.DeepEqual(mmap.Data, number) {
+		t.Fatal("mmap data should be empty")
+	}
+
+	if err := mmap.Close(); err != nil {
+		logger.Error(err, "close mmap")
 		t.Fatal(err)
 	}
 
-	readData := make([]byte, 4)
-	n, err = m2.ReadAt(readData, 0)
+	mmap, err = NewMMap(fpath, true)
 	if err != nil {
+		logger.Error(err, "create mmap")
 		t.Fatal(err)
-	} else if n != 4 {
-		t.Fatal("read error")
 	}
 
-	if !reflect.DeepEqual(testData, readData) {
-		fmt.Println(testData, readData)
-		t.Fatal("incorrect data")
+	if !reflect.DeepEqual(mmap.Data, number) {
+		t.Fatal("mmap data should be empty")
+	}
+
+	if err := mmap.Close(); err != nil {
+		logger.Error(err, "close mmap")
+		t.Fatal(err)
+	}
+
+	if err := os.RemoveAll(fpath); err != nil {
+		logger.Error(err, "delete file")
+		t.Fatal(err)
 	}
 }
 
-func TestWriteSyncRead(t *testing.T) {
-	fpath := "/tmp/m1"
-	defer os.Remove(fpath)
-
-	m, err := New(&Options{Path: fpath})
-	if err != nil {
+func TestNewFile(t *testing.T) {
+	if err := os.RemoveAll(fpath); err != nil {
+		logger.Error(err, "delete file")
 		t.Fatal(err)
 	}
 
-	err = m.Grow(4)
+	file, err := NewFile(fpath, 10, true)
 	if err != nil {
+		logger.Error(err, "create mfile")
 		t.Fatal(err)
 	}
 
-	testData := []byte{1, 2, 3, 4}
-	n, err := m.WriteAt(testData, 0)
-	if err != nil {
-		t.Fatal(err)
-	} else if n != 4 {
-		t.Fatal("write error")
-	}
-
-	err = m.Sync()
-	if err != nil {
+	if err := file.Close(); err != nil {
+		logger.Error(err, "close mfile")
 		t.Fatal(err)
 	}
 
-	err = m.Close()
-	if err != nil {
+	if err := os.Remove(fpath); err != nil {
+		logger.Error(err, "delete file")
+		t.Fatal(err)
+	}
+}
+
+func TestWriteReadFile(t *testing.T) {
+	if err := os.RemoveAll(fpath); err != nil {
+		logger.Error(err, "delete file")
 		t.Fatal(err)
 	}
 
-	m2, err := New(&Options{Path: fpath})
+	file, err := NewFile(fpath, 10, true)
 	if err != nil {
+		logger.Error(err, "create mfile")
 		t.Fatal(err)
 	}
 
-	readData := make([]byte, 4)
-	n, err = m2.ReadAt(readData, 0)
-	if err != nil {
-		t.Fatal(err)
-	} else if n != 4 {
-		t.Fatal("read error")
+	if file.Size() != 10 {
+		t.Fatal("incorrect size")
 	}
 
-	if !reflect.DeepEqual(testData, readData) {
-		fmt.Println(testData, readData)
-		t.Fatal("incorrect data")
+	if n, err := file.WriteAt([]byte{1}, 19); err != nil {
+		logger.Error(err, "writeAt mfile")
+		t.Fatal(err)
+	} else if n != 1 {
+		t.Fatal("bytes written != payload size")
+	}
+
+	if sz := file.Size(); sz != 20 {
+		t.Fatal("incorrect size", sz)
+	}
+
+	if err := file.Close(); err != nil {
+		logger.Error(err, "close mfile")
+		t.Fatal(err)
+	}
+
+	file, err = NewFile(fpath, 10, true)
+	if err != nil {
+		logger.Error(err, "create mfile")
+		t.Fatal(err)
+	}
+
+	p := []byte{0}
+	if n, err := file.ReadAt(p, 19); err != nil {
+		logger.Error(err, "readAt mfile")
+		t.Fatal(err)
+	} else if n != 1 {
+		t.Fatal("bytes read != payload size")
+	}
+
+	if err := file.Close(); err != nil {
+		logger.Error(err, "close mfile")
+		t.Fatal(err)
+	}
+
+	if err := os.Remove(fpath); err != nil {
+		logger.Error(err, "delete file")
+		t.Fatal(err)
 	}
 }
