@@ -47,7 +47,7 @@ type Metadata struct {
 
 	memmap *mmap.File
 	closed *secure.Bool
-	syncfn *fnutils.Batch
+	syncfn *fnutils.Group
 	rdonly bool
 }
 
@@ -72,7 +72,7 @@ func NewMetadata(path string, sz int64) (mdata *Metadata, err error) {
 		meta.SetSize(sz)
 	}
 
-	batch := fnutils.NewBatch(func() {
+	batch := fnutils.NewGroup(func() {
 		if err := m.Sync(); err != nil {
 			logger.Error(err, "sync metadata")
 		}

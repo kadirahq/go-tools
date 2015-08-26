@@ -6,16 +6,16 @@ import (
 	"time"
 )
 
-func TestBatch(t *testing.T) {
+func TestGroup(t *testing.T) {
 	var n int64
 
-	b := NewBatch(func() {
+	g := NewGroup(func() {
 		time.Sleep(100 * time.Millisecond)
 		atomic.AddInt64(&n, 1)
 	})
 
 	for i := 0; i < 3; i++ {
-		go b.Run()
+		go g.Run()
 	}
 
 	// wait to make sure batch is waiting
@@ -27,11 +27,11 @@ func TestBatch(t *testing.T) {
 
 	// start second batch calls
 	for i := 0; i < 3; i++ {
-		go b.Run()
+		go g.Run()
 	}
 
 	// flush first batch
-	b.Flush()
+	g.Flush()
 
 	if atomic.LoadInt64(&n) != 1 {
 		t.Fatal("n != 1")
@@ -45,7 +45,7 @@ func TestBatch(t *testing.T) {
 	}
 
 	// flush second batch
-	b.Flush()
+	g.Flush()
 
 	if atomic.LoadInt64(&n) != 2 {
 		t.Fatal("n != 2")
