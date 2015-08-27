@@ -88,19 +88,8 @@ func NewMetadata(path string, sz int64) (m *Metadata, err error) {
 		syncfn:   batch,
 	}
 
-	go func() {
-		for _ = range time.Tick(10 * time.Millisecond) {
-			if m.closed.Get() {
-				break
-			}
-
-			if m.dosync.Get() {
-				m.syncfn.Flush()
-			}
-
-			time.Sleep(10 * time.Millisecond)
-		}
-	}()
+	// start syncing!
+	go syncMetadata(m)
 
 	return m, nil
 }
@@ -147,4 +136,18 @@ func (m *Metadata) Close() (err error) {
 	}
 
 	return nil
+}
+
+func syncMetadata(m *Metadata) {
+	for _ = range time.Tick(10 * time.Millisecond) {
+		if m.closed.Get() {
+			break
+		}
+
+		if m.dosync.Get() {
+			m.syncfn.Flush()
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
 }
