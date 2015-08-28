@@ -20,12 +20,16 @@ func (v *Bool) Get() bool {
 	v.RLock()
 	value := v.Value
 	v.RUnlock()
+
 	return value
 }
 
 // Set is the setter.
-func (v *Bool) Set(value bool) {
+func (v *Bool) Set(value bool) (changed bool) {
 	v.Lock()
+	changed = v.Value != value
 	v.Value = value
 	v.Unlock()
+
+	return changed
 }
