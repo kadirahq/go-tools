@@ -11,7 +11,6 @@ import (
 
 	goerr "github.com/go-errors/errors"
 	"github.com/kadirahq/go-tools/fsutils"
-	"github.com/kadirahq/go-tools/logger"
 	"github.com/kadirahq/go-tools/mmap"
 	"github.com/kadirahq/go-tools/secure"
 )
@@ -41,9 +40,6 @@ var (
 
 	// ErrClosed is returned when the resource is closed
 	ErrClosed = errors.New("cannot use closed resource")
-
-	// Logger logs stuff
-	Logger = logger.New("SEGFILE")
 )
 
 // Options for new File
@@ -252,6 +248,10 @@ func (f *file) Write(p []byte) (n int, err error) {
 }
 
 func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
+	meta := f.meta
+	meta.RLock()
+	defer meta.RUnlock()
+
 	if f.closed.Get() {
 		return 0, goerr.Wrap(ErrClosed, 0)
 	}
@@ -269,13 +269,9 @@ func (f *file) ReadAt(p []byte, off int64) (n int, err error) {
 	sz64 := int64(size)
 	segments := f.segments
 	// get start/end segments and start/end offsets
-	sseg, soff, eseg, eoff := f.calcRange(sz64, off)
+	sseg, soff, eseg, eoff := calcRange(f.fsize, sz64, off)
 
-	meta := f.meta
-	meta.RLock()
 	segs := meta.Segs()
-	meta.RUnlock()
-
 	if sseg >= segs {
 		return 0, io.EOF
 	}
@@ -361,7 +357,7 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 
 	segments := f.segments
 	// get start/end segments and start/end offsets
-	sseg, soff, eseg, eoff := f.calcRange(sz64, off)
+	sseg, soff, eseg, eoff := calcRange(f.fsize, sz64, off)
 
 	for i := sseg; i <= eseg; i++ {
 		var writer io.WriterAt
@@ -407,7 +403,7 @@ func (f *file) WriteAt(p []byte, off int64) (n int, err error) {
 
 	// pre-allocate in a background go routine
 	// pre allocation started only one at a time
-	if !f.palloc.Get() {
+	if f.palloc.Set(true) {
 		go f.preallocate(dend + f.pthresh)
 	}
 
@@ -420,6 +416,14 @@ func (f *file) Seek(offset int64, whence int) (off int64, err error) {
 	f.iomutex.Lock()
 	defer f.iomutex.Unlock()
 
+	meta := f.meta
+	meta.RLock()
+	defer meta.RUnlock()
+
+	if f.closed.Get() {
+		return 0, goerr.Wrap(ErrClosed, 0)
+	}
+
 	switch whence {
 	case 0:
 		off = offset
@@ -427,10 +431,7 @@ func (f *file) Seek(offset int64, whence int) (off int64, err error) {
 	case 1:
 		off = atomic.AddInt64(&f.offset, offset)
 	case 2:
-		meta := f.meta
-		meta.RLock()
 		used := meta.Used()
-		meta.RUnlock()
 		off = atomic.AddInt64(&f.offset, offset+used)
 	}
 
@@ -438,28 +439,28 @@ func (f *file) Seek(offset int64, whence int) (off int64, err error) {
 }
 
 func (f *file) Size() (sz int64) {
+	meta := f.meta
+	meta.RLock()
+	defer meta.RUnlock()
+
 	if f.closed.Get() {
-		Logger.Error(ErrClosed)
 		return 0
 	}
 
-	meta := f.meta
-	meta.RLock()
 	used := meta.Used()
-	meta.RUnlock()
-
 	return used
 }
 
 func (f *file) Grow(sz int64) (err error) {
+	meta := f.meta
+
 	if f.closed.Get() {
 		return goerr.Wrap(ErrClosed, 0)
 	}
 
 	// Calculate the file size after growing and make sure that the offset
 	// exists in segfile. Allocate new segment files is necessary.
-
-	meta := f.meta
+	// ensureOffset also locks the metadata file therefore, release the lock.
 	meta.RLock()
 	fsize := meta.Used() + sz
 	meta.RUnlock()
@@ -475,31 +476,34 @@ func (f *file) Grow(sz int64) (err error) {
 }
 
 func (f *file) Reset() (err error) {
+	f.iomutex.Lock()
+	defer f.iomutex.Unlock()
+
 	if f.closed.Get() {
 		return goerr.Wrap(ErrClosed, 0)
 	}
 
-	f.iomutex.Lock()
 	f.offset = 0
-	f.iomutex.Unlock()
 	return nil
 }
 
 func (f *file) Clear() (err error) {
+	f.iomutex.Lock()
+	defer f.iomutex.Unlock()
+
+	meta := f.meta
+	meta.Lock()
+	defer meta.Unlock()
+
 	if f.closed.Get() {
 		return goerr.Wrap(ErrClosed, 0)
 	}
 
 	// clear io.Reader/io.Writer offset
-	f.iomutex.Lock()
 	f.offset = 0
-	f.iomutex.Unlock()
 
-	meta := f.meta
-	meta.Lock()
 	meta.SetUsed(0)
 	meta.Sync()
-	meta.Unlock()
 
 	return nil
 }
@@ -520,15 +524,18 @@ func (f *file) Sync() (err error) {
 }
 
 func (f *file) Close() (err error) {
+	f.almutex.Lock()
+	defer f.almutex.Unlock()
+
+	f.meta.Lock()
+	defer f.meta.Unlock()
+
 	if f.closed.Get() {
 		return goerr.Wrap(ErrClosed, 0)
 	}
 
 	// this will stop future requests
 	f.closed.Set(true)
-
-	f.almutex.Lock()
-	defer f.almutex.Unlock()
 
 	if err = f.meta.Close(); err != nil {
 		return goerr.Wrap(err, 0)
@@ -545,17 +552,12 @@ func (f *file) Close() (err error) {
 
 func (f *file) updateSize(off int64) {
 	meta := f.meta
-	meta.RLock()
-	used := meta.Used()
-	meta.RUnlock()
+	meta.Lock()
+	defer meta.Unlock()
 
-	if off <= used {
+	if f.closed.Get() {
 		return
 	}
-
-	meta.Lock()
-	// TODO remove defer
-	defer meta.Unlock()
 
 	// used can change between RUnlock and Lock
 	if used := meta.Used(); off > used {
@@ -564,36 +566,41 @@ func (f *file) updateSize(off int64) {
 }
 
 func (f *file) preallocate(off int64) {
-	f.palloc.Set(true)
 	defer f.palloc.Set(false)
+
+	if f.closed.Get() {
+		return
+	}
+
 	if err := f.ensureOffset(off); err != nil {
-		Logger.Error(err)
+		// TODO handle pre allocation failure
 	}
 }
 
 func (f *file) ensureOffset(off int64) (err error) {
+	f.almutex.Lock()
+	defer f.almutex.Unlock()
+
 	meta := f.meta
+	meta.Lock()
+	defer meta.Unlock()
+
+	if f.closed.Get() {
+		return goerr.Wrap(ErrClosed, 0)
+	}
+
 	need := off / f.fsize
 
 	if mod := off % f.fsize; mod != 0 {
 		need++
 	}
 
-	f.almutex.Lock()
 	have := int64(len(f.segments))
 	diff := need - have
 
 	if diff <= 0 {
-		f.almutex.Unlock()
 		return nil
 	}
-
-	// TODO remove defer
-	defer f.almutex.Unlock()
-
-	meta.Lock()
-	// TODO remove defer
-	defer meta.Unlock()
 
 	bpath := path.Join(f.fpath, f.fprefix)
 	fsize := f.fsize
@@ -631,9 +638,7 @@ func (f *file) ensureOffset(off int64) (err error) {
 	return nil
 }
 
-func (f *file) calcRange(size, off int64) (sseg, soff, eseg, eoff int64) {
-	fsize := f.fsize
-
+func calcRange(fsize, size, off int64) (sseg, soff, eseg, eoff int64) {
 	sseg = off / fsize
 	soff = off % fsize
 	eseg = (size + off) / fsize
@@ -699,18 +704,13 @@ func loadFile(fpath string, sz int64) (file *os.File, err error) {
 
 // closeFiles closes a slice of files
 func closeFiles(files []Segment) {
-	if files == nil {
-		return
-	}
-
 	for _, file := range files {
 		if file == nil {
 			continue
 		}
 
-		err := file.Close()
-		if err != nil {
-			Logger.Error(err)
+		if err := file.Close(); err != nil {
+			// TODO handle file close fail
 		}
 	}
 }
@@ -729,7 +729,7 @@ func loadMMaps(segs, sz int64, bpath string) (segments []Segment, err error) {
 		fpath := bpath + strconv.Itoa(i)
 		segment, err := loadMMap(fpath, sz)
 		if err != nil {
-			// closeMMaps(segments)
+			closeMMaps(segments)
 			return nil, err
 		}
 
@@ -752,18 +752,13 @@ func loadMMap(fpath string, sz int64) (mfile *mmap.File, err error) {
 
 // closeMMaps closes a slice of mmaps
 func closeMMaps(mmaps []Segment) {
-	if mmaps == nil {
-		return
-	}
-
 	for _, mfile := range mmaps {
 		if mfile == nil {
 			continue
 		}
 
-		err := mfile.Close()
-		if err != nil {
-			Logger.Error(err)
+		if err := mfile.Close(); err != nil {
+			// TODO handle mmap close error
 		}
 	}
 }

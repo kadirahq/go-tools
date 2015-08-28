@@ -74,22 +74,21 @@ func NewMetadata(path string, sz int64) (m *Metadata, err error) {
 		meta.SetSize(sz)
 	}
 
-	batch := fnutils.NewGroup(func() {
-		if err := mfile.Sync(); err != nil {
-			logger.Error(err, "sync metadata", path)
-		}
-	})
-
 	m = &Metadata{
 		Metadata: meta,
 		memmap:   mfile,
 		closed:   secure.NewBool(false),
 		dosync:   secure.NewBool(false),
-		syncfn:   batch,
 	}
 
+	m.syncfn = fnutils.NewGroup(func() {
+		if err := m.memmap.Sync(); err != nil {
+			logger.Error(err, "sync metadata", path)
+		}
+	})
+
 	// start syncing!
-	go syncMetadata(m)
+	go m.syncMetadata()
 
 	return m, nil
 }
@@ -114,7 +113,7 @@ func ReadMetadata(path string) (mdata *Metadata, err error) {
 
 // Sync syncs the memory map to the disk
 func (m *Metadata) Sync() {
-	if !m.rdonly {
+	if !m.closed.Get() && !m.rdonly {
 		m.dosync.Set(true)
 		m.syncfn.Run()
 	}
@@ -138,13 +137,13 @@ func (m *Metadata) Close() (err error) {
 	return nil
 }
 
-func syncMetadata(m *Metadata) {
+func (m *Metadata) syncMetadata() {
 	for _ = range time.Tick(10 * time.Millisecond) {
 		if m.closed.Get() {
 			break
 		}
 
-		if m.dosync.Get() {
+		if m.dosync.Set(false) {
 			m.syncfn.Flush()
 		}
 
