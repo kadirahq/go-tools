@@ -76,7 +76,7 @@ func NewMetadata(path string, sz int64) (m *Metadata, err error) {
 
 	batch := fnutils.NewGroup(func() {
 		if err := mfile.Sync(); err != nil {
-			logger.Error(err, "sync metadata")
+			logger.Error(err, "sync metadata", path)
 		}
 	})
 
