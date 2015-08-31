@@ -55,9 +55,9 @@ func TestNewMetadata(t *testing.T) {
 		t.Fatal("incorrect values", got)
 	}
 
-	md.SetSegs(1)
-	md.SetSize(2)
-	md.SetUsed(3)
+	md.MutateSegs(1)
+	md.MutateSize(2)
+	md.MutateUsed(3)
 
 	if got := md.Segs(); got != 1 {
 		t.Fatal("incorrect values", got)
@@ -91,9 +91,9 @@ func TestNewMetadata(t *testing.T) {
 		t.Fatal("incorrect values", got)
 	}
 
-	md.SetSegs(100)
-	md.SetSize(200)
-	md.SetUsed(300)
+	md.MutateSegs(100)
+	md.MutateSize(200)
+	md.MutateUsed(300)
 
 	err = md.Close()
 	if err != nil {
@@ -144,7 +144,7 @@ func BenchmarkMetadataWrite(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		var i int64
 		for i = 0; pb.Next(); i++ {
-			md.SetSegs(i)
+			md.MutateSegs(i)
 		}
 	})
 
@@ -173,7 +173,7 @@ func BenchmarkMetadataWriteAndSync(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		var i int64
 		for i = 0; pb.Next(); i++ {
-			md.SetSegs(i)
+			md.MutateSegs(i)
 			md.Sync()
 		}
 	})

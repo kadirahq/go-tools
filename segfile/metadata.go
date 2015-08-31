@@ -36,9 +36,9 @@ func init() {
 	mdsize = int64(len(mdtemp))
 
 	meta := metadata.GetRootAsMetadata(mdtemp, 0)
-	meta.SetSegs(0)
-	meta.SetSize(0)
-	meta.SetUsed(0)
+	meta.MutateSegs(0)
+	meta.MutateSize(0)
+	meta.MutateUsed(0)
 }
 
 // Metadata persists segfile information to disk in flatbuffer format
@@ -71,7 +71,7 @@ func NewMetadata(path string, sz int64) (m *Metadata, err error) {
 	data := mfile.MMap.Data
 	meta := metadata.GetRootAsMetadata(data, 0)
 	if meta.Size() == 0 {
-		meta.SetSize(sz)
+		meta.MutateSize(sz)
 	}
 
 	m = &Metadata{

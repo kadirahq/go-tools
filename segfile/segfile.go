@@ -502,7 +502,7 @@ func (f *file) Clear() (err error) {
 	// clear io.Reader/io.Writer offset
 	f.offset = 0
 
-	meta.SetUsed(0)
+	meta.MutateUsed(0)
 	meta.Sync()
 
 	return nil
@@ -561,7 +561,7 @@ func (f *file) updateSize(off int64) {
 
 	// used can change between RUnlock and Lock
 	if used := meta.Used(); off > used {
-		meta.SetUsed(off)
+		meta.MutateUsed(off)
 	}
 }
 
@@ -633,7 +633,7 @@ func (f *file) ensureOffset(off int64) (err error) {
 	}
 
 	f.segments = segments
-	meta.SetSegs(need)
+	meta.MutateSegs(need)
 
 	return nil
 }
