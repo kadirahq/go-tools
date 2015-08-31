@@ -1,6 +1,8 @@
 # Logger
 
-A basic logger package which supports multiple levels of logging. Users can enable of disable log levels using the "log" environment variable. By default, logger logs **info** and **error** logs. Custom log levels can be added as required. More information can be found on [godoc](http://godoc.org/github.com/kadirahq/go-tools/logger).
+> status: completed
+
+A basic logger package which supports multiple levels of logging. Users can enable or disable log levels using the "log" environment variable. By default, logger logs **info** and **error** levle logs. Custom log levels can be added anytime as required. More information can be found on [godoc](http://godoc.org/github.com/kadirahq/go-tools/logger).
 
 
 ## Installing
