@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	goerr "github.com/go-errors/errors"
 )
@@ -100,5 +101,33 @@ func TestErrorWithStack(t *testing.T) {
 	if got := string(buffer.Bytes()); !strings.HasPrefix(got, exp) &&
 		len(got) > len(exp) {
 		t.Fatalf("exp: %s got: %s", exp, got)
+	}
+}
+
+func TestTime(t *testing.T) {
+	buffer.Reset()
+
+	now := time.Now()
+	time.Sleep(time.Millisecond)
+	Time(now, 0)
+
+	exp := colcya("(time) app") + ": 1."
+
+	if got := string(buffer.Bytes()); !strings.HasPrefix(got, exp) &&
+		strings.HasSuffix(got, "ms []") &&
+		len(got) > len(exp) {
+		t.Fatalf("exp: %s got: %s", exp, got)
+	}
+}
+
+func TestTimeCond(t *testing.T) {
+	buffer.Reset()
+
+	now := time.Now()
+	time.Sleep(100 * time.Microsecond)
+	Time(now, time.Millisecond)
+
+	if got := string(buffer.Bytes()); !strings.HasPrefix(got, "") {
+		t.Fatalf("exp: %s got: %s", "", got)
 	}
 }
