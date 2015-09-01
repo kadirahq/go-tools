@@ -30,11 +30,7 @@ func (rcv *Metadata) Segs() int64 {
 }
 
 func (rcv *Metadata) MutateSegs(n int64) bool {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(4))
-	if o != 0 {
-		 return rcv._tab.MutateInt64(o + rcv._tab.Pos, n)
-	}
-	return false
+	return rcv._tab.MutateInt64Slot(4, n)
 }
 
 func (rcv *Metadata) Size() int64 {
@@ -46,11 +42,7 @@ func (rcv *Metadata) Size() int64 {
 }
 
 func (rcv *Metadata) MutateSize(n int64) bool {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(6))
-	if o != 0 {
-		 return rcv._tab.MutateInt64(o + rcv._tab.Pos, n)
-	}
-	return false
+	return rcv._tab.MutateInt64Slot(6, n)
 }
 
 func (rcv *Metadata) Used() int64 {
@@ -62,11 +54,7 @@ func (rcv *Metadata) Used() int64 {
 }
 
 func (rcv *Metadata) MutateUsed(n int64) bool {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(8))
-	if o != 0 {
-		 return rcv._tab.MutateInt64(o + rcv._tab.Pos, n)
-	}
-	return false
+	return rcv._tab.MutateInt64Slot(8, n)
 }
 
 func MetadataStart(builder *flatbuffers.Builder) { builder.StartObject(3) }
