@@ -69,8 +69,8 @@ func Error(err error, logs ...interface{}) {
 }
 
 // Time tracks the time duration using the default logger
-func Time(beg time.Time, logs ...interface{}) {
-	logger.Time(beg, logs...)
+func Time(beg time.Time, min time.Duration, logs ...interface{}) {
+	logger.Time(beg, min, logs...)
 }
 
 // Logger is a logger with a header
@@ -126,11 +126,10 @@ func (l *Logger) Error(err error, logs ...interface{}) {
 	}
 }
 
-// Time tracks the time duration from start time
-// This is best when used with a defer statement.
-func (l *Logger) Time(beg time.Time, logs ...interface{}) {
-	if levels["time"] {
-		dur := time.Since(beg)
+// Time tracks the time duration from start time and logs if its > minimum.
+// The Time method can be used to track elapsed time when used with a defer.
+func (l *Logger) Time(beg time.Time, min time.Duration, logs ...interface{}) {
+	if dur := time.Since(beg); levels["time"] && dur > min {
 		content := fmt.Sprintf("%s: %s %+v", colcya("(time) "+l.head), dur, logs)
 		output.Println(content)
 	}
