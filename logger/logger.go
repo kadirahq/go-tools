@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/fatih/color"
 	goerr "github.com/go-errors/errors"
@@ -23,12 +24,13 @@ var (
 	colblu = color.New(color.FgBlue).SprintFunc()
 	colred = color.New(color.FgRed).SprintFunc()
 	colyel = color.New(color.FgYellow).SprintFunc()
+	colcya = color.New(color.FgCyan).SprintFunc()
 )
 
 func init() {
 	env := os.Getenv(envar)
 	if env == "" {
-		env = "info,error"
+		env = "info,error,time"
 	}
 
 	for _, lvl := range strings.Split(env, delim) {
@@ -64,6 +66,11 @@ func Debug(logs ...interface{}) {
 // Error prints error logs using the default logger
 func Error(err error, logs ...interface{}) {
 	logger.Error(err, logs...)
+}
+
+// Time tracks the time duration using the default logger
+func Time(beg time.Time, logs ...interface{}) {
+	logger.Time(beg, logs...)
 }
 
 // Logger is a logger with a header
@@ -116,5 +123,15 @@ func (l *Logger) Error(err error, logs ...interface{}) {
 		default:
 			output.Println(content + "\n" + err.Error())
 		}
+	}
+}
+
+// Time tracks the time duration from start time
+// This is best when used with a defer statement.
+func (l *Logger) Time(beg time.Time, logs ...interface{}) {
+	if levels["time"] {
+		dur := time.Since(beg)
+		content := fmt.Sprintf("%s: %s %+v", colcya("(time) "+l.head), dur, logs)
+		output.Println(content)
 	}
 }
