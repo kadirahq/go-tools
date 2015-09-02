@@ -43,11 +43,6 @@ func Values() (res map[string]int64) {
 	return store.Values()
 }
 
-// Print logs using the default metric store
-func Print(dur time.Duration) (ch chan bool) {
-	return store.Print(dur)
-}
-
 //   Store
 // ---------
 
@@ -106,31 +101,18 @@ func (s *Store) Track(k string, n int64) {
 // Values returns all values as a map
 func (s *Store) Values() (res map[string]int64) {
 	res = map[string]int64{}
+
 	for k, m := range s.vals {
 		res[k] = m.Value()
 	}
 
-	return res
-}
-
-// Print logs application metrics to stdout with given interval
-// The "metrics" log level should be enabled for this to work.
-// It will also log all children metric stores recursively.
-func (s *Store) Print(dur time.Duration) (ch chan bool) {
-	ch = make(chan bool)
-
-	go func() {
-		for {
-			select {
-			case <-ch:
-				break
-			case <-time.After(dur):
-				s.log()
-			}
+	for _, sub := range s.subs {
+		for k, v := range sub.Values() {
+			res[k] = v
 		}
-	}()
+	}
 
-	return ch
+	return res
 }
 
 func (s *Store) log() {
