@@ -68,7 +68,10 @@ func (s *Store) New(head string) (sub *Store) {
 	}
 
 	key := s.head + "." + head
-	return newStore(key)
+	sub = newStore(key)
+	s.subs[head] = sub
+
+	return sub
 }
 
 // Register a new metric to measure later
@@ -90,12 +93,15 @@ func (s *Store) Register(k string, t Type) {
 // registered before tracking values.
 func (s *Store) Track(k string, n int64) {
 	k = s.head + ":" + k
-	if m, ok := s.vals[k]; ok {
-		m.Track(n)
-	} else {
-		logger.Debug("unregistered monitor key", k)
-		s.vals[k] = &counter{}
+
+	m, ok := s.vals[k]
+	if !ok {
+		logger.Debug("unregistered key", k)
+		m = &counter{}
+		s.vals[k] = m
 	}
+
+	m.Track(n)
 }
 
 // Values returns all values as a map
@@ -113,13 +119,6 @@ func (s *Store) Values() (res map[string]int64) {
 	}
 
 	return res
-}
-
-func (s *Store) log() {
-	logger.Print("metrics", s.head, s.Values())
-	for _, sub := range s.subs {
-		sub.log()
-	}
 }
 
 //   metric
