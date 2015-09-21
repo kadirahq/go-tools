@@ -1,9 +1,0 @@
-namespace metadata;
-
-table Metadata {
-  segs:long;
-  size:long;
-  used:long;
-}
-
-root_type Metadata;
