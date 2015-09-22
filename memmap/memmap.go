@@ -18,8 +18,12 @@ const (
 
 var (
 	// ErrZeroSz is used when the user attempts to create a memory map
-	// with an empty file. Use the size parameter to set required size.
+	// with zero file size. Provide a value > 0 for the size parameter.
 	ErrZeroSz = errors.New("cannot create mmap with empty file")
+
+	// ErrBadSz is used when the user attempts to create a memory map
+	// with an existing file but its size if not equal to expected size.
+	ErrBadSz = errors.New("cannot create mmap with empty file")
 )
 
 // Map is a struct which abstracts memory map system calls and provides a fast
@@ -53,6 +57,11 @@ func NewMap(path string, size int64) (m *Map, err error) {
 	sz := info.Size()
 
 	if sz != size {
+		if sz != 0 {
+			file.Close()
+			return nil, ErrBadSz
+		}
+
 		if err := file.Truncate(size); err != nil {
 			file.Close()
 			return nil, err
