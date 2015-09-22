@@ -20,8 +20,7 @@ var (
 // Map is a collection of memory maps. Using a set of memory mapped files can
 // be faster than using a single memory map file. Also, it allocates faster.
 type Map struct {
-	Maps map[int64]*memmap.Map
-
+	Maps []*memmap.Map
 	path string
 	size int64
 	mutx *sync.RWMutex
@@ -34,7 +33,7 @@ func NewMap(path string, size int64) (m *Map, err error) {
 	}
 
 	m = &Map{
-		Maps: map[int64]*memmap.Map{},
+		Maps: []*memmap.Map{},
 		path: path,
 		size: size,
 		mutx: &sync.RWMutex{},
@@ -48,12 +47,13 @@ func (m *Map) Load(id int64) (f *memmap.Map, err error) {
 	// fast path: file already exists
 	// RLocks costs lower than Locks
 	m.mutx.RLock()
-	f, ok := m.Maps[id]
-	m.mutx.RUnlock()
-
-	if ok {
-		return f, nil
+	if id < int64(len(m.Maps)) {
+		if f = m.Maps[id]; f != nil {
+			m.mutx.RUnlock()
+			return f, nil
+		}
 	}
+	m.mutx.RUnlock()
 
 	m.mutx.Lock()
 	f, err = m.load(id)
@@ -61,8 +61,8 @@ func (m *Map) Load(id int64) (f *memmap.Map, err error) {
 		m.mutx.Unlock()
 		return nil, err
 	}
-
 	m.mutx.Unlock()
+
 	return f, nil
 }
 
@@ -215,8 +215,12 @@ func (m *Map) Close() (err error) {
 // load creates a memory map and adds it to the map.
 // make sure the mutex is locked before running this.
 func (m *Map) load(id int64) (f *memmap.Map, err error) {
-	if f, ok := m.Maps[id]; ok {
-		return f, nil
+	count := int64(len(m.Maps))
+
+	if id < count {
+		if f = m.Maps[id]; f != nil {
+			return f, nil
+		}
 	}
 
 	idstr := strconv.Itoa(int(id))
@@ -225,7 +229,13 @@ func (m *Map) load(id int64) (f *memmap.Map, err error) {
 		return nil, err
 	}
 
-	// add new map
+	// grow the slice
+	if id >= count {
+		maps := make([]*memmap.Map, id+1)
+		copy(maps, m.Maps)
+		m.Maps = maps
+	}
+
 	m.Maps[id] = f
 
 	return f, nil
@@ -253,17 +263,20 @@ func (m *Map) prealloc(id int64) {
 	// fast path: file already exists
 	// RLocks costs lower than Locks
 	m.mutx.RLock()
-	_, ok := m.Maps[id]
+	if id < int64(len(m.Maps)) {
+		if f := m.Maps[id]; f != nil {
+			m.mutx.RUnlock()
+			return
+		}
+	}
 	m.mutx.RUnlock()
 
-	if ok {
-		return
-	}
-
 	m.mutx.Lock()
-	if _, ok := m.Maps[id]; ok {
-		m.mutx.Unlock()
-		return
+	if id < int64(len(m.Maps)) {
+		if f := m.Maps[id]; f != nil {
+			m.mutx.RUnlock()
+			return
+		}
 	}
 
 	go func() {
