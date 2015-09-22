@@ -9,6 +9,20 @@ const (
 	Sz{{BG}} = {{SZ}}
 )
 
+// Encode{{BG}} updates the byte slice to match value
+func Encode{{BG}}(d []byte, v *{{SM}}) {
+	head := (*reflect.SliceHeader)(unsafe.Pointer(&d))
+	value := (*{{SM}})(unsafe.Pointer(head.Data))
+	*value = *v
+}
+
+// Decode{{BG}} updates the value to match the byte slice
+func Decode{{BG}}(d []byte, v *{{SM}}) {
+	head := (*reflect.SliceHeader)(unsafe.Pointer(&d))
+	value := (*{{SM}})(unsafe.Pointer(head.Data))
+	*v = *value
+}
+
 // {{BG}} has a {{SM}} value and a byte slice using the same memory location.
 // Any changes done to one of these fields will reflect on the other.
 type {{BG}} struct {
@@ -29,6 +43,8 @@ func New{{BG}}(d []byte) *{{BG}} {
 	return v
 }
 
+// Read updates the struct to use provided byte slice
+// This can be used when it's required to read data from
 func (v *{{BG}}) Read(d []byte) {
 	head := (*reflect.SliceHeader)(unsafe.Pointer(&d))
 	v.Value = (*{{SM}})(unsafe.Pointer(head.Data))
