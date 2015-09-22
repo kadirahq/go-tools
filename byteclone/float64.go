@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	szfloat64 = 8
+	SzFloat64 = 8
 )
 
 // Float64 has a float64 value and a byte slice using the same memory location.
@@ -21,16 +21,16 @@ type Float64 struct {
 // If the slice length is less than required length, it will panic.
 func NewFloat64(d []byte) *Float64 {
 	if d == nil {
-		d = make([]byte, szfloat64)
+		d = make([]byte, SzFloat64)
 	}
 
 	v := &Float64{}
-	v.Read(d[:szfloat64])
+	v.Read(d[:SzFloat64])
 	return v
 }
 
 func (v *Float64) Read(d []byte) {
 	head := (*reflect.SliceHeader)(unsafe.Pointer(&d))
 	v.Value = (*float64)(unsafe.Pointer(head.Data))
-	v.Bytes = d[:szfloat64]
+	v.Bytes = d[:SzFloat64]
 }

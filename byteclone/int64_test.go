@@ -28,24 +28,24 @@ func TestInt64(t *testing.T) {
 	d = append(d, 1, 2, 3, 4, 5)
 	v.Read(d)
 
-	if !bytes.Equal(v.Bytes, d[:szint64]) || *v.Value != 10 {
+	if !bytes.Equal(v.Bytes, d[:SzInt64]) || *v.Value != 10 {
 		t.Fatal("wrong value")
 	}
 }
 
 func BenchmarkInt64Read(b *testing.B) {
-	var d = make([]byte, b.N*szint64)
+	var d = make([]byte, b.N*SzInt64)
 	var s = NewInt64(nil)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		s.Read(d[i*szint64:])
+		s.Read(d[i*SzInt64:])
 	}
 }
 
 func BenchmarkInt64BinaryRead(b *testing.B) {
 	var v int64
-	var d = make([]byte, b.N*szint64)
+	var d = make([]byte, b.N*SzInt64)
 	var s = bytes.NewBuffer(d)
 
 	b.ResetTimer()
@@ -65,7 +65,7 @@ func BenchmarkInt64Write(b *testing.B) {
 
 func BenchmarkInt64BinaryWrite(b *testing.B) {
 	var v int64
-	var d = make([]byte, b.N*szint64)
+	var d = make([]byte, b.N*SzInt64)
 	var s = bytes.NewBuffer(d)
 
 	b.ResetTimer()

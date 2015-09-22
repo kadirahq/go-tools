@@ -28,24 +28,24 @@ func TestUint16(t *testing.T) {
 	d = append(d, 1, 2, 3, 4, 5)
 	v.Read(d)
 
-	if !bytes.Equal(v.Bytes, d[:szuint16]) || *v.Value != 10 {
+	if !bytes.Equal(v.Bytes, d[:SzUint16]) || *v.Value != 10 {
 		t.Fatal("wrong value")
 	}
 }
 
 func BenchmarkUint16Read(b *testing.B) {
-	var d = make([]byte, b.N*szuint16)
+	var d = make([]byte, b.N*SzUint16)
 	var s = NewUint16(nil)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		s.Read(d[i*szuint16:])
+		s.Read(d[i*SzUint16:])
 	}
 }
 
 func BenchmarkUint16BinaryRead(b *testing.B) {
 	var v uint16
-	var d = make([]byte, b.N*szuint16)
+	var d = make([]byte, b.N*SzUint16)
 	var s = bytes.NewBuffer(d)
 
 	b.ResetTimer()
@@ -65,7 +65,7 @@ func BenchmarkUint16Write(b *testing.B) {
 
 func BenchmarkUint16BinaryWrite(b *testing.B) {
 	var v uint16
-	var d = make([]byte, b.N*szuint16)
+	var d = make([]byte, b.N*SzUint16)
 	var s = bytes.NewBuffer(d)
 
 	b.ResetTimer()

@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	szuint64 = 8
+	SzUint64 = 8
 )
 
 // Uint64 has a uint64 value and a byte slice using the same memory location.
@@ -21,16 +21,16 @@ type Uint64 struct {
 // If the slice length is less than required length, it will panic.
 func NewUint64(d []byte) *Uint64 {
 	if d == nil {
-		d = make([]byte, szuint64)
+		d = make([]byte, SzUint64)
 	}
 
 	v := &Uint64{}
-	v.Read(d[:szuint64])
+	v.Read(d[:SzUint64])
 	return v
 }
 
 func (v *Uint64) Read(d []byte) {
 	head := (*reflect.SliceHeader)(unsafe.Pointer(&d))
 	v.Value = (*uint64)(unsafe.Pointer(head.Data))
-	v.Bytes = d[:szuint64]
+	v.Bytes = d[:SzUint64]
 }

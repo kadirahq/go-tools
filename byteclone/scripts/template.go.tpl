@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	sz{{SM}} = {{SZ}}
+	Sz{{BG}} = {{SZ}}
 )
 
 // {{BG}} has a {{SM}} value and a byte slice using the same memory location.
@@ -21,16 +21,16 @@ type {{BG}} struct {
 // If the slice length is less than required length, it will panic.
 func New{{BG}}(d []byte) *{{BG}} {
 	if d == nil {
-		d = make([]byte, sz{{SM}})
+		d = make([]byte, Sz{{BG}})
 	}
 
 	v := &{{BG}}{}
-	v.Read(d[:sz{{SM}}])
+	v.Read(d[:Sz{{BG}}])
 	return v
 }
 
 func (v *{{BG}}) Read(d []byte) {
 	head := (*reflect.SliceHeader)(unsafe.Pointer(&d))
 	v.Value = (*{{SM}})(unsafe.Pointer(head.Data))
-	v.Bytes = d[:sz{{SM}}]
+	v.Bytes = d[:Sz{{BG}}]
 }

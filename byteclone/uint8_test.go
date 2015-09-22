@@ -28,24 +28,24 @@ func TestUint8(t *testing.T) {
 	d = append(d, 1, 2, 3, 4, 5)
 	v.Read(d)
 
-	if !bytes.Equal(v.Bytes, d[:szuint8]) || *v.Value != 10 {
+	if !bytes.Equal(v.Bytes, d[:SzUint8]) || *v.Value != 10 {
 		t.Fatal("wrong value")
 	}
 }
 
 func BenchmarkUint8Read(b *testing.B) {
-	var d = make([]byte, b.N*szuint8)
+	var d = make([]byte, b.N*SzUint8)
 	var s = NewUint8(nil)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		s.Read(d[i*szuint8:])
+		s.Read(d[i*SzUint8:])
 	}
 }
 
 func BenchmarkUint8BinaryRead(b *testing.B) {
 	var v uint8
-	var d = make([]byte, b.N*szuint8)
+	var d = make([]byte, b.N*SzUint8)
 	var s = bytes.NewBuffer(d)
 
 	b.ResetTimer()
@@ -65,7 +65,7 @@ func BenchmarkUint8Write(b *testing.B) {
 
 func BenchmarkUint8BinaryWrite(b *testing.B) {
 	var v uint8
-	var d = make([]byte, b.N*szuint8)
+	var d = make([]byte, b.N*SzUint8)
 	var s = bytes.NewBuffer(d)
 
 	b.ResetTimer()

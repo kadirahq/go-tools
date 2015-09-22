@@ -28,24 +28,24 @@ func Test{{BG}}(t *testing.T) {
 	d = append(d, 1, 2, 3, 4, 5)
 	v.Read(d)
 
-	if !bytes.Equal(v.Bytes, d[:sz{{SM}}]) || *v.Value != 10 {
+	if !bytes.Equal(v.Bytes, d[:Sz{{BG}}]) || *v.Value != 10 {
 		t.Fatal("wrong value")
 	}
 }
 
 func Benchmark{{BG}}Read(b *testing.B) {
-	var d = make([]byte, b.N*sz{{SM}})
+	var d = make([]byte, b.N*Sz{{BG}})
 	var s = New{{BG}}(nil)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		s.Read(d[i*sz{{SM}}:])
+		s.Read(d[i*Sz{{BG}}:])
 	}
 }
 
 func Benchmark{{BG}}BinaryRead(b *testing.B) {
 	var v {{SM}}
-	var d = make([]byte, b.N*sz{{SM}})
+	var d = make([]byte, b.N*Sz{{BG}})
 	var s = bytes.NewBuffer(d)
 
 	b.ResetTimer()
@@ -65,7 +65,7 @@ func Benchmark{{BG}}Write(b *testing.B) {
 
 func Benchmark{{BG}}BinaryWrite(b *testing.B) {
 	var v {{SM}}
-	var d = make([]byte, b.N*sz{{SM}})
+	var d = make([]byte, b.N*Sz{{BG}})
 	var s = bytes.NewBuffer(d)
 
 	b.ResetTimer()

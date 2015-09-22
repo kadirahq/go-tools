@@ -28,24 +28,24 @@ func TestFloat64(t *testing.T) {
 	d = append(d, 1, 2, 3, 4, 5)
 	v.Read(d)
 
-	if !bytes.Equal(v.Bytes, d[:szfloat64]) || *v.Value != 10 {
+	if !bytes.Equal(v.Bytes, d[:SzFloat64]) || *v.Value != 10 {
 		t.Fatal("wrong value")
 	}
 }
 
 func BenchmarkFloat64Read(b *testing.B) {
-	var d = make([]byte, b.N*szfloat64)
+	var d = make([]byte, b.N*SzFloat64)
 	var s = NewFloat64(nil)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		s.Read(d[i*szfloat64:])
+		s.Read(d[i*SzFloat64:])
 	}
 }
 
 func BenchmarkFloat64BinaryRead(b *testing.B) {
 	var v float64
-	var d = make([]byte, b.N*szfloat64)
+	var d = make([]byte, b.N*SzFloat64)
 	var s = bytes.NewBuffer(d)
 
 	b.ResetTimer()
@@ -65,7 +65,7 @@ func BenchmarkFloat64Write(b *testing.B) {
 
 func BenchmarkFloat64BinaryWrite(b *testing.B) {
 	var v float64
-	var d = make([]byte, b.N*szfloat64)
+	var d = make([]byte, b.N*SzFloat64)
 	var s = bytes.NewBuffer(d)
 
 	b.ResetTimer()

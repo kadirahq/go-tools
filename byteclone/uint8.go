@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	szuint8 = 1
+	SzUint8 = 1
 )
 
 // Uint8 has a uint8 value and a byte slice using the same memory location.
@@ -21,16 +21,16 @@ type Uint8 struct {
 // If the slice length is less than required length, it will panic.
 func NewUint8(d []byte) *Uint8 {
 	if d == nil {
-		d = make([]byte, szuint8)
+		d = make([]byte, SzUint8)
 	}
 
 	v := &Uint8{}
-	v.Read(d[:szuint8])
+	v.Read(d[:SzUint8])
 	return v
 }
 
 func (v *Uint8) Read(d []byte) {
 	head := (*reflect.SliceHeader)(unsafe.Pointer(&d))
 	v.Value = (*uint8)(unsafe.Pointer(head.Data))
-	v.Bytes = d[:szuint8]
+	v.Bytes = d[:SzUint8]
 }
