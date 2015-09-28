@@ -32,3 +32,28 @@ func TestAddFloat64(t *testing.T) {
 		t.Fatal("Not added correctly. Expected:", expected, "Got:", testFloat)
 	}
 }
+
+func BenchmarkWithMutex(b *testing.B) {
+	var f float64
+	var m sync.Mutex
+
+	b.SetParallelism(1000)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			m.Lock()
+			f += 0.1
+			m.Unlock()
+		}
+	})
+}
+
+func BenchmarkWithAtomic(b *testing.B) {
+	var f float64
+
+	b.SetParallelism(1000)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			AddFloat64(&f, 0.1)
+		}
+	})
+}
