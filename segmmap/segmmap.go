@@ -201,6 +201,17 @@ func (m *Map) WriteAt(p []byte, off int64) (n int, err error) {
 	return n, nil
 }
 
+// Sync syncs all loaded memory maps
+func (m *Map) Sync() (err error) {
+	for _, f := range m.Maps {
+		if err := f.Sync(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // Lock locks all loaded memory maps
 func (m *Map) Lock() (err error) {
 	for _, f := range m.Maps {
