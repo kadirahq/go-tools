@@ -4,15 +4,21 @@ package system
 import "C"
 import "time"
 
-// PCPU returns cpu usage as a percentage
-// Based on http://stackoverflow.com/a/31030753
-// TODO verify results (seems okay)
-// TODO remove the 1 second sleep
-func PCPU() float64 {
-	startSeconds := time.Now()
-	startTicks := C.clock()
-	time.Sleep(time.Second)
-	clockSeconds := float64(C.clock()-startTicks) / float64(C.CLOCKS_PER_SEC)
-	realSeconds := time.Since(startSeconds).Seconds()
-	return clockSeconds / realSeconds * 100
+var (
+	// PCPU has cpu usage as a percentage
+	// this value is updated every second
+	PCPU float64
+)
+
+func init() {
+	go setPCPU()
+}
+
+func setPCPU() {
+	for {
+		ticks := C.clock()
+		time.Sleep(time.Second)
+		clock := float64(C.clock()-ticks) / float64(C.CLOCKS_PER_SEC)
+		PCPU = 100 * clock
+	}
 }
