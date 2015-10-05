@@ -1,4 +1,4 @@
-package atomicplus
+package fatomic
 
 import (
 	"sync"

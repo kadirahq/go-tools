@@ -1,4 +1,4 @@
-package byteclone
+package hybrid
 
 import (
 	"reflect"
