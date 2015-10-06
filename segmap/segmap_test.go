@@ -1,4 +1,4 @@
-package segmmap
+package segmap
 
 import (
 	"bytes"
