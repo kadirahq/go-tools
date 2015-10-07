@@ -1,3 +1,4 @@
+// Package system exposes a number of useful information about the system.
 package system
 
 //#include <time.h>
@@ -23,8 +24,8 @@ func setpcpu() {
 	}
 }
 
-// PCPU returns the total cpu usage as a percentage. The usage value is updated
-// in the background every second. Usage is claculated by counting cpu ticks.
+// PCPU returns the total cpu usage as a percentage. The cpu usage is updated in
+// the background every second. CPU usage is claculated by counting cpu ticks.
 func PCPU() float64 {
 	return pcpu
 }
