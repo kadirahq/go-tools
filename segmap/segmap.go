@@ -17,59 +17,59 @@ var (
 	ErrZeroSz = errors.New("cannot create mmap with empty file")
 )
 
-// Map is a collection of memory maps. Using a set of memory mapped files can
+// Store is a collection of memory maps. Using a set of memory mapped files can
 // be faster than using a single memory map file. Also, it allocates faster.
-type Map struct {
-	Maps []*memmap.Map
+type Store struct {
+	segs []*memmap.Map
 	path string
 	size int64
 	mutx *sync.RWMutex
 }
 
-// NewMap creates a collection of memory maps on given path
-func NewMap(path string, size int64) (m *Map, err error) {
+// New creates a collection of memory maps on given path
+func New(path string, size int64) (s *Store, err error) {
 	if size == 0 {
 		return nil, ErrZeroSz
 	}
 
-	m = &Map{
-		Maps: []*memmap.Map{},
+	s = &Store{
+		segs: []*memmap.Map{},
 		path: path,
 		size: size,
 		mutx: &sync.RWMutex{},
 	}
 
-	return m, nil
+	return s, nil
 }
 
 // Load loads a segment file into memory.
-func (m *Map) Load(id int64) (f *memmap.Map, err error) {
+func (s *Store) Load(id int64) (f *memmap.Map, err error) {
 	// fast path: file already exists
 	// RLocks costs lower than Locks
-	m.mutx.RLock()
-	if id < int64(len(m.Maps)) {
-		if f = m.Maps[id]; f != nil {
-			m.mutx.RUnlock()
+	s.mutx.RLock()
+	if id < int64(len(s.segs)) {
+		if f = s.segs[id]; f != nil {
+			s.mutx.RUnlock()
 			return f, nil
 		}
 	}
-	m.mutx.RUnlock()
+	s.mutx.RUnlock()
 
-	m.mutx.Lock()
-	f, err = m.load(id)
+	s.mutx.Lock()
+	f, err = s.load(id)
 	if err != nil {
-		m.mutx.Unlock()
+		s.mutx.Unlock()
 		return nil, err
 	}
-	m.mutx.Unlock()
+	s.mutx.Unlock()
 
 	return f, nil
 }
 
 // LoadAll loads all existing segment files into memory.
-func (m *Map) LoadAll() (err error) {
-	dir := path.Dir(m.path)
-	base := path.Base(m.path)
+func (s *Store) LoadAll() (err error) {
+	dir := path.Dir(s.path)
+	base := path.Base(s.path)
 
 	files, err := ioutil.ReadDir(dir)
 	if err != nil {
@@ -90,7 +90,7 @@ func (m *Map) LoadAll() (err error) {
 			}
 
 			id := int64(i)
-			if _, err := m.load(id); err != nil {
+			if _, err := s.load(id); err != nil {
 				// TODO file exists at location but cannot load it
 				// should this return an error or load other files?
 				continue
@@ -102,11 +102,11 @@ func (m *Map) LoadAll() (err error) {
 }
 
 // ReadAt reads data from memory maps starting from offset `off`
-func (m *Map) ReadAt(p []byte, off int64) (n int, err error) {
-	s := int64(len(p))
+func (s *Store) ReadAt(p []byte, off int64) (n int, err error) {
+	sz := int64(len(p))
 	p = p[:0]
 
-	ps, err := m.ZReadAt(s, off)
+	ps, err := s.ZReadAt(sz, off)
 	if err != nil {
 		return 0, err
 	}
@@ -124,18 +124,18 @@ func (m *Map) ReadAt(p []byte, off int64) (n int, err error) {
 // Data gets read without memory copying but it can be unsafe at times.
 // Make sure that the memory map remains mapped while using this data.
 // For extended use, make a copy of this data or use the `ReadAt` method.
-func (m *Map) ZReadAt(sz, off int64) (ps [][]byte, err error) {
-	nfiles := sz / m.size
-	if off%m.size != 0 {
+func (s *Store) ZReadAt(sz, off int64) (ps [][]byte, err error) {
+	nfiles := sz / s.size
+	if off%s.size != 0 {
 		nfiles++
 	}
 
 	ps = make([][]byte, 0, nfiles)
-	sf, ef, so, eo := m.bounds(sz, off)
+	sf, ef, so, eo := s.bounds(sz, off)
 
 	for i := sf; i <= ef; i++ {
 		var fso int64
-		var feo = m.size
+		var feo = s.size
 
 		if i == sf {
 			fso = so
@@ -145,13 +145,13 @@ func (m *Map) ZReadAt(sz, off int64) (ps [][]byte, err error) {
 			feo = eo
 		}
 
-		m.mutx.Lock()
-		f, err := m.load(i)
+		s.mutx.Lock()
+		f, err := s.load(i)
 		if err != nil {
-			m.mutx.Unlock()
+			s.mutx.Unlock()
 			return nil, err
 		}
-		m.mutx.Unlock()
+		s.mutx.Unlock()
 
 		d := f.Data[fso:feo]
 		ps = append(ps, d)
@@ -165,13 +165,13 @@ func (m *Map) ZReadAt(sz, off int64) (ps [][]byte, err error) {
 }
 
 // WriteAt writes data to memory maps starting from offset `off`
-func (m *Map) WriteAt(p []byte, off int64) (n int, err error) {
+func (s *Store) WriteAt(p []byte, off int64) (n int, err error) {
 	sz := int64(len(p))
-	sf, ef, so, eo := m.bounds(sz, off)
+	sf, ef, so, eo := s.bounds(sz, off)
 
 	for i := sf; i <= ef; i++ {
 		var fso int64
-		var feo = m.size
+		var feo = s.size
 
 		if i == sf {
 			fso = so
@@ -181,13 +181,13 @@ func (m *Map) WriteAt(p []byte, off int64) (n int, err error) {
 			feo = eo
 		}
 
-		m.mutx.Lock()
-		f, err := m.load(i)
+		s.mutx.Lock()
+		f, err := s.load(i)
 		if err != nil {
-			m.mutx.Unlock()
+			s.mutx.Unlock()
 			return n, err
 		}
-		m.mutx.Unlock()
+		s.mutx.Unlock()
 
 		ln := int(feo - fso)
 		copy(f.Data[fso:feo], p[n:n+ln])
@@ -196,14 +196,14 @@ func (m *Map) WriteAt(p []byte, off int64) (n int, err error) {
 
 	// check whether the file after last used file exists
 	// if not available load in a background goroutine
-	m.prealloc(ef + 1)
+	s.prealloc(ef + 1)
 
 	return n, nil
 }
 
 // Sync syncs all loaded memory maps
-func (m *Map) Sync() (err error) {
-	for _, f := range m.Maps {
+func (s *Store) Sync() (err error) {
+	for _, f := range s.segs {
 		if err := f.Sync(); err != nil {
 			return err
 		}
@@ -213,8 +213,8 @@ func (m *Map) Sync() (err error) {
 }
 
 // Lock locks all loaded memory maps
-func (m *Map) Lock() (err error) {
-	for _, f := range m.Maps {
+func (s *Store) Lock() (err error) {
+	for _, f := range s.segs {
 		if err := f.Lock(); err != nil {
 			return err
 		}
@@ -224,8 +224,8 @@ func (m *Map) Lock() (err error) {
 }
 
 // Close closes all loaded memory maps
-func (m *Map) Close() (err error) {
-	for _, f := range m.Maps {
+func (s *Store) Close() (err error) {
+	for _, f := range s.segs {
 		if err := f.Close(); err != nil {
 			return err
 		}
@@ -236,17 +236,17 @@ func (m *Map) Close() (err error) {
 
 // load creates a memory map and adds it to the map.
 // make sure the mutex is locked before running this.
-func (m *Map) load(id int64) (f *memmap.Map, err error) {
-	count := int64(len(m.Maps))
+func (s *Store) load(id int64) (f *memmap.Map, err error) {
+	count := int64(len(s.segs))
 
 	if id < count {
-		if f = m.Maps[id]; f != nil {
+		if f = s.segs[id]; f != nil {
 			return f, nil
 		}
 	}
 
 	idstr := strconv.Itoa(int(id))
-	f, err = memmap.NewMap(m.path+idstr, m.size)
+	f, err = memmap.NewMap(s.path+idstr, s.size)
 	if err != nil {
 		return nil, err
 	}
@@ -254,25 +254,25 @@ func (m *Map) load(id int64) (f *memmap.Map, err error) {
 	// grow the slice
 	if id >= count {
 		maps := make([]*memmap.Map, id+1)
-		copy(maps, m.Maps)
-		m.Maps = maps
+		copy(maps, s.segs)
+		s.segs = maps
 	}
 
-	m.Maps[id] = f
+	s.segs[id] = f
 
 	return f, nil
 }
 
-func (m *Map) bounds(sz, off int64) (sf, ef, so, eo int64) {
+func (s *Store) bounds(sz, off int64) (sf, ef, so, eo int64) {
 	end := off + sz
 
-	sf = off / m.size
-	so = off % m.size
-	ef = end / m.size
-	eo = end % m.size
+	sf = off / s.size
+	so = off % s.size
+	ef = end / s.size
+	eo = end % s.size
 
 	if eo == 0 {
-		eo = m.size
+		eo = s.size
 		ef--
 	}
 
@@ -281,32 +281,32 @@ func (m *Map) bounds(sz, off int64) (sf, ef, so, eo int64) {
 
 // prealloc allocates a new file in a background go-routine.
 // This is extremely similar to `Load` except the background part.
-func (m *Map) prealloc(id int64) {
+func (s *Store) prealloc(id int64) {
 	// fast path: file already exists
 	// RLocks costs lower than Locks
-	m.mutx.RLock()
-	if id < int64(len(m.Maps)) {
-		if f := m.Maps[id]; f != nil {
-			m.mutx.RUnlock()
+	s.mutx.RLock()
+	if id < int64(len(s.segs)) {
+		if f := s.segs[id]; f != nil {
+			s.mutx.RUnlock()
 			return
 		}
 	}
-	m.mutx.RUnlock()
+	s.mutx.RUnlock()
 
-	m.mutx.Lock()
-	if id < int64(len(m.Maps)) {
-		if f := m.Maps[id]; f != nil {
-			m.mutx.RUnlock()
+	s.mutx.Lock()
+	if id < int64(len(s.segs)) {
+		if f := s.segs[id]; f != nil {
+			s.mutx.RUnlock()
 			return
 		}
 	}
 
 	go func() {
-		if _, err := m.load(id); err != nil {
+		if _, err := s.load(id); err != nil {
 			// NOTE: failed to pre-allocate file.
 			// We can safely ignore this error.
 		}
 
-		m.mutx.Unlock()
+		s.mutx.Unlock()
 	}()
 }
