@@ -201,6 +201,14 @@ func (s *Store) WriteAt(p []byte, off int64) (n int, err error) {
 	return n, nil
 }
 
+// Length returns the number of segment files loaded
+func (s *Store) Length() (n int) {
+	s.mutx.RLock()
+	n = len(s.segs)
+	s.mutx.RUnlock()
+	return n
+}
+
 // Sync syncs all loaded memory maps
 func (s *Store) Sync() (err error) {
 	for _, f := range s.segs {
