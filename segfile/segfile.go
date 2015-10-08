@@ -1,39 +1,36 @@
-package segmap
+package segfile
 
 import (
 	"errors"
 	"io/ioutil"
+	"os"
 	"path"
 	"strconv"
 	"strings"
 	"sync"
-
-	"github.com/kadirahq/go-tools/memmap"
 )
 
 var (
-	// ErrZeroSz is used when the user attempts to create a memory map
-	// with an empty file. Use the size parameter to set required size.
-	ErrZeroSz = errors.New("cannot create mmap with empty file")
+	// ErrRead is used when a read didn't complete
+	ErrRead = errors.New("bytes read != required size")
+
+	// ErrWrite is used when a write didn't complete
+	ErrWrite = errors.New("bytes written != payload size")
 )
 
-// Store is a collection of memory maps. Using a set of memory mapped files can
-// be faster than using a single memory map file. Also, it allocates faster.
+// Store is a collection of segment files. Using a set of segment files can
+// be faster than using a single growing file. Also, it allocates faster.
 type Store struct {
-	segs []*memmap.Map
+	segs []*os.File
 	path string
 	size int64
 	mutx *sync.RWMutex
 }
 
-// New creates a collection of memory maps on given path
+// New creates a collection of segment files on given path
 func New(path string, size int64) (s *Store, err error) {
-	if size == 0 {
-		return nil, ErrZeroSz
-	}
-
 	s = &Store{
-		segs: []*memmap.Map{},
+		segs: []*os.File{},
 		path: path,
 		size: size,
 		mutx: &sync.RWMutex{},
@@ -42,8 +39,8 @@ func New(path string, size int64) (s *Store, err error) {
 	return s, nil
 }
 
-// Load loads a segment file into memory.
-func (s *Store) Load(id int64) (f *memmap.Map, err error) {
+// Load opens a segment file handler.
+func (s *Store) Load(id int64) (f *os.File, err error) {
 	// fast path: file already exists
 	// RLocks costs lower than Locks
 	s.mutx.RLock()
@@ -104,33 +101,6 @@ func (s *Store) LoadAll() (err error) {
 // ReadAt reads data from memory maps starting from offset `off`
 func (s *Store) ReadAt(p []byte, off int64) (n int, err error) {
 	sz := int64(len(p))
-	p = p[:0]
-
-	ps, err := s.ZReadAt(sz, off)
-	if err != nil {
-		return 0, err
-	}
-
-	for _, r := range ps {
-		n += len(r)
-		p = append(p, r...)
-	}
-
-	return n, nil
-}
-
-// ZReadAt reads data from memory maps starting from offset `off`
-// ZReadAt returns a slice of slices from the memory map themselves.
-// Data gets read without memory copying but it can be unsafe at times.
-// Make sure that the memory map remains mapped while using this data.
-// For extended use, make a copy of this data or use the `ReadAt` method.
-func (s *Store) ZReadAt(sz, off int64) (ps [][]byte, err error) {
-	nfiles := sz / s.size
-	if off%s.size != 0 {
-		nfiles++
-	}
-
-	ps = make([][]byte, 0, nfiles)
 	sf, ef, so, eo := s.bounds(sz, off)
 
 	for i := sf; i <= ef; i++ {
@@ -149,19 +119,23 @@ func (s *Store) ZReadAt(sz, off int64) (ps [][]byte, err error) {
 		f, err := s.load(i)
 		if err != nil {
 			s.mutx.Unlock()
-			return nil, err
+			return n, err
 		}
 		s.mutx.Unlock()
 
-		d := f.Data[fso:feo]
-		ps = append(ps, d)
+		ln := int(feo - fso)
+		dst := p[n : n+ln]
+
+		if c, err := f.ReadAt(dst, fso); err != nil {
+			return n, err
+		} else if c != ln {
+			return n, ErrRead
+		}
+
+		n += ln
 	}
 
-	if err != nil {
-		return ps, err
-	}
-
-	return ps, nil
+	return n, nil
 }
 
 // WriteAt writes data to memory maps starting from offset `off`
@@ -190,7 +164,14 @@ func (s *Store) WriteAt(p []byte, off int64) (n int, err error) {
 		s.mutx.Unlock()
 
 		ln := int(feo - fso)
-		copy(f.Data[fso:feo], p[n:n+ln])
+		src := p[n : n+ln]
+
+		if c, err := f.WriteAt(src, fso); err != nil {
+			return n, err
+		} else if c != ln {
+			return n, ErrWrite
+		}
+
 		n += ln
 	}
 
@@ -212,17 +193,6 @@ func (s *Store) Sync() (err error) {
 	return nil
 }
 
-// Lock locks all loaded memory maps
-func (s *Store) Lock() (err error) {
-	for _, f := range s.segs {
-		if err := f.Lock(); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 // Close closes all loaded memory maps
 func (s *Store) Close() (err error) {
 	for _, f := range s.segs {
@@ -236,7 +206,7 @@ func (s *Store) Close() (err error) {
 
 // load creates a memory map and adds it to the map.
 // make sure the mutex is locked before running this.
-func (s *Store) load(id int64) (f *memmap.Map, err error) {
+func (s *Store) load(id int64) (f *os.File, err error) {
 	count := int64(len(s.segs))
 
 	if id < count {
@@ -246,16 +216,16 @@ func (s *Store) load(id int64) (f *memmap.Map, err error) {
 	}
 
 	idstr := strconv.Itoa(int(id))
-	f, err = memmap.NewMap(s.path+idstr, s.size)
+	f, err = os.OpenFile(s.path+idstr, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
 
 	// grow the slice
 	if id >= count {
-		maps := make([]*memmap.Map, id+1)
-		copy(maps, s.segs)
-		s.segs = maps
+		segs := make([]*os.File, id+1)
+		copy(segs, s.segs)
+		s.segs = segs
 	}
 
 	s.segs[id] = f

@@ -1,4 +1,4 @@
-package segmap
+package segfile
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	tmpdir  = "/tmp/test-segmap/"
+	tmpdir  = "/tmp/test-segfile/"
 	tmpfile = tmpdir + "file_"
 )
 
@@ -143,7 +143,7 @@ func TestBounds(t *testing.T) {
 	}
 }
 
-func TMapRw(t *testing.T, sz, off int64) {
+func TSegRw(t *testing.T, sz, off int64) {
 	setup(t)
 	defer clear(t)
 
@@ -181,12 +181,12 @@ func TMapRw(t *testing.T, sz, off int64) {
 	}
 }
 
-func TestMapRW(t *testing.T) {
-	TMapRw(t, 10, 0) // one complete file
-	TMapRw(t, 20, 0) // two complete files
-	TMapRw(t, 5, 0)  // write from start
-	TMapRw(t, 5, 2)  // write from middle
-	TMapRw(t, 5, 5)  // write upto end
+func TestSegRW(t *testing.T) {
+	TSegRw(t, 10, 0) // one complete file
+	TSegRw(t, 20, 0) // two complete files
+	TSegRw(t, 5, 0)  // write from start
+	TSegRw(t, 5, 2)  // write from middle
+	TSegRw(t, 5, 5)  // write upto end
 }
 
 func TestPreAlloc(t *testing.T) {
