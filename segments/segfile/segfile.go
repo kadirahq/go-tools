@@ -136,7 +136,7 @@ func (s *Store) ReadAt(p []byte, off int64) (n int, err error) {
 		seg := s.segs[i]
 
 		for done < req {
-			c, err := seg.ReadAt(toread, start+done)
+			c, err := seg.ReadAt(toread[:req-done], start+done)
 			if err != nil {
 				return false, err
 			}
@@ -168,7 +168,7 @@ func (s *Store) WriteAt(p []byte, off int64) (n int, err error) {
 		seg := s.segs[i]
 
 		for done < req {
-			c, err := seg.WriteAt(towrite, start+done)
+			c, err := seg.WriteAt(towrite[:req-done], start+done)
 			if err != nil {
 				return false, err
 			}
@@ -181,7 +181,8 @@ func (s *Store) WriteAt(p []byte, off int64) (n int, err error) {
 		return false, nil
 	}
 
-	return n, segments.Bounds(s.size, off, off+sz, fn)
+	err = segments.Bounds(s.size, off, off+sz, fn)
+	return n, err
 }
 
 // SliceAt implements the fs.SlicerAt interface
@@ -269,8 +270,17 @@ func (s *Store) ensure(n int64) (err error) {
 		}
 
 		if sz := info.Size(); sz != s.size {
-			err = segments.ErrSegSize
-			return err
+			if sz != 0 {
+				// file already exists with different size
+				// this can be caused by corrupted files
+				return segments.ErrSegSize
+			}
+
+			// If the file size if zero, it should be a new
+			// segment file. Truncate it to required size.
+			if err := file.Truncate(s.size); err != nil {
+				return err
+			}
 		}
 
 		s.segs = append(s.segs, file)
