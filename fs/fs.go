@@ -17,3 +17,9 @@ type SlicerAt interface {
 type Slicer interface {
 	Slice(sz int64) (p []byte, err error)
 }
+
+// Ensurer interface provides an Ensure method which will
+// make sure that the given offset exists and has a value.
+type Ensurer interface {
+	Ensure(off int64) (err error)
+}
