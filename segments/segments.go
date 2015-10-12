@@ -25,6 +25,7 @@ type Store interface {
 	io.ReaderAt
 	io.WriterAt
 	fs.SlicerAt
+	fs.Ensurer
 	fs.Syncer
 	io.Closer
 }

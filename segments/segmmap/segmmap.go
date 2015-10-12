@@ -199,6 +199,17 @@ func (s *Store) SliceAt(sz, off int64) (p []byte, err error) {
 	return p, nil
 }
 
+// Ensure makes sure that data upto given offset exists and are valid.
+// This will check from current segment length upto given position.
+func (s *Store) Ensure(off int64) (err error) {
+	n := off / s.size
+	if off%s.size != 0 {
+		n++
+	}
+
+	return s.ensure(n)
+}
+
 // Sync implements the fs.Syncer interface
 func (s *Store) Sync() (err error) {
 	s.segmx.RLock()
@@ -227,7 +238,7 @@ func (s *Store) Close() (err error) {
 	return nil
 }
 
-// ensure amkes sure that segments upto given index exists and are valid.
+// ensure makes sure that segments upto given index exists and are valid.
 // This will check from current segment length upto given position.
 func (s *Store) ensure(n int64) (err error) {
 	num := int(n)
