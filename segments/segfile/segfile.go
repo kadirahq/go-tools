@@ -269,8 +269,17 @@ func (s *Store) ensure(n int64) (err error) {
 		}
 
 		if sz := info.Size(); sz != s.size {
-			err = segments.ErrSegSize
-			return err
+			if sz != 0 {
+				// file already exists with different size
+				// this can be caused by corrupted files
+				return segments.ErrSegSize
+			}
+
+			// If the file size if zero, it should be a new
+			// segment file. Truncate it to required size.
+			if err := file.Truncate(s.size); err != nil {
+				return err
+			}
 		}
 
 		s.segs = append(s.segs, file)
