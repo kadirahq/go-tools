@@ -1,4 +1,4 @@
-package segfile
+package segmmap
 
 import (
 	"os"
