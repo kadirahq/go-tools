@@ -60,7 +60,7 @@ func TestNew(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if len(s.segs) != 0 {
+		if len(s.segs) != 1+1 {
 			t.Fatal("wrong length")
 		}
 
@@ -78,7 +78,7 @@ func TestOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(s.segs) != 0 {
+	if len(s.segs) != 1+1 {
 		t.Fatal("wrong length")
 	}
 
@@ -95,7 +95,7 @@ func TestOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(s.segs) != 6 {
+	if len(s.segs) != 6+1 {
 		t.Fatal("wrong length")
 	}
 

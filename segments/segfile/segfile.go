@@ -65,6 +65,11 @@ func New(base string, size int64) (s *Store, err error) {
 		offmx: &sync.Mutex{},
 	}
 
+	if err := s.ensure(0); err != nil {
+		// TODO
+		_ = err
+	}
+
 	return s, nil
 }
 
@@ -237,8 +242,10 @@ func (s *Store) Close() (err error) {
 
 // ensure makes sure that segments upto given index exists and are valid.
 // This will check from current segment length upto given position.
+// This will also pre allocate an additional segment file/mmap.
 func (s *Store) ensure(n int64) (err error) {
-	num := int(n)
+	// +1 preallocate
+	num := int(n) + 1
 
 	// fast path
 	s.segmx.RLock()
