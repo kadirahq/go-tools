@@ -38,7 +38,7 @@ func TestGroup(t *testing.T) {
 	}
 
 	// wait to make sure none of second batch is done
-	time.Sleep(time.Second)
+	time.Sleep(time.Millisecond)
 
 	if atomic.LoadInt64(&n) != 1 {
 		t.Fatal("n != 1")
