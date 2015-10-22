@@ -55,7 +55,7 @@ func TestNew(t *testing.T) {
 	defer setup(t)()
 
 	for i := 0; i < 3; i++ {
-		s, err := New(tmpfile, 10)
+		s, err := New(tmpfile, 10, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -73,7 +73,7 @@ func TestNew(t *testing.T) {
 func TestOpen(t *testing.T) {
 	defer setup(t)()
 
-	s, err := New(tmpfile, 10)
+	s, err := New(tmpfile, 10, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s, err = New(tmpfile, 10)
+	s, err = New(tmpfile, 10, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestOpen(t *testing.T) {
 func TestSync(t *testing.T) {
 	defer setup(t)()
 
-	s, err := New(tmpfile, 10)
+	s, err := New(tmpfile, 10, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestSync(t *testing.T) {
 func TestReader(t *testing.T) {
 	defer setup(t)()
 
-	s, err := New(tmpfile, 3)
+	s, err := New(tmpfile, 3, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestReader(t *testing.T) {
 func TestWriter(t *testing.T) {
 	defer setup(t)()
 
-	s, err := New(tmpfile, 3)
+	s, err := New(tmpfile, 3, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestWriter(t *testing.T) {
 func TestSlicer(t *testing.T) {
 	defer setup(t)()
 
-	s, err := New(tmpfile, 3)
+	s, err := New(tmpfile, 3, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func TestSlicer(t *testing.T) {
 func TestReaderAt(t *testing.T) {
 	defer setup(t)()
 
-	s, err := New(tmpfile, 3)
+	s, err := New(tmpfile, 3, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func TestReaderAt(t *testing.T) {
 func TestWriterAt(t *testing.T) {
 	defer setup(t)()
 
-	s, err := New(tmpfile, 3)
+	s, err := New(tmpfile, 3, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +287,7 @@ func TestWriterAt(t *testing.T) {
 func TestSlicerAt(t *testing.T) {
 	defer setup(t)()
 
-	s, err := New(tmpfile, 3)
+	s, err := New(tmpfile, 3, false)
 	if err != nil {
 		t.Fatal(err)
 	}

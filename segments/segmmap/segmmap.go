@@ -20,7 +20,7 @@ var (
 // matching provided base path. The base path should contain
 // the path to the segment file and the segment file prefix.
 // example: "/path/to/segment/files/prefix_"
-func LoadSegs(base string, size int64) (segs []*Segment, err error) {
+func LoadSegs(base string, size int64, lock bool) (segs []*Segment, err error) {
 	segs = []*Segment{}
 
 	for i := 0; true; i++ {
@@ -38,9 +38,11 @@ func LoadSegs(base string, size int64) (segs []*Segment, err error) {
 			return nil, err
 		}
 
-		if err := seg.Lock(); err != nil {
-			go seg.Close()
-			return nil, err
+		if lock {
+			if err := seg.Lock(); err != nil {
+				go seg.Close()
+				return nil, err
+			}
 		}
 
 		segs = append(segs, &Segment{seg, 0})
@@ -67,8 +69,8 @@ type Store struct {
 }
 
 // New creates a collection of segment files on given path
-func New(base string, size int64) (s *Store, err error) {
-	segs, err := LoadSegs(base, size)
+func New(base string, size int64, lock bool) (s *Store, err error) {
+	segs, err := LoadSegs(base, size, lock)
 	if err != nil {
 		return nil, err
 	}
