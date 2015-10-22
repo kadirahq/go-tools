@@ -5,25 +5,26 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/kadirahq/go-tools/segments"
 )
 
-// LoadFiles laods all existing segment files available
+// LoadSegs laods all existing segment files available
 // matching provided base path. The base path should contain
 // the path to the segment file and the segment file prefix.
 // example: "/path/to/segment/files/prefix_"
-func LoadFiles(base string, size int64) (segs []*os.File, err error) {
-	segs = []*os.File{}
+func LoadSegs(base string, size int64) (segs []*Segment, err error) {
+	segs = []*Segment{}
 
 	for i := 0; true; i++ {
 		path := base + strconv.Itoa(i)
-		file, err := os.OpenFile(path, os.O_RDWR, 0644)
+		seg, err := os.OpenFile(path, os.O_RDWR, 0644)
 		if err != nil {
 			break
 		}
 
-		info, err := file.Stat()
+		info, err := seg.Stat()
 		if err != nil {
 			return nil, err
 		}
@@ -33,16 +34,22 @@ func LoadFiles(base string, size int64) (segs []*os.File, err error) {
 			return nil, err
 		}
 
-		segs = append(segs, file)
+		segs = append(segs, &Segment{seg, 0})
 	}
 
 	return segs, nil
 }
 
+// Segment extends os.File with a dirty checking flag
+type Segment struct {
+	*os.File
+	dirty uint32
+}
+
 // Store is a collection of segment files. Using a set of segment files can
 // be faster than using a single growing file. Also, it allocates faster.
 type Store struct {
-	segs  []*os.File
+	segs  []*Segment
 	segmx *sync.RWMutex
 	base  string
 	size  int64
@@ -52,7 +59,7 @@ type Store struct {
 
 // New creates a collection of segment files on given path
 func New(base string, size int64) (s *Store, err error) {
-	segs, err := LoadFiles(base, size)
+	segs, err := LoadSegs(base, size)
 	if err != nil {
 		return nil, err
 	}
@@ -183,11 +190,17 @@ func (s *Store) WriteAt(p []byte, off int64) (n int, err error) {
 			towrite = towrite[c:]
 		}
 
+		// mark the segment as changed
+		atomic.StoreUint32(&seg.dirty, 1)
+
 		return false, nil
 	}
 
-	err = segments.Bounds(s.size, off, off+sz, fn)
-	return n, err
+	if err := segments.Bounds(s.size, off, off+sz, fn); err != nil {
+		return n, err
+	}
+
+	return n, nil
 }
 
 // SliceAt implements the fs.SlicerAt interface
@@ -216,6 +229,10 @@ func (s *Store) Ensure(off int64) (err error) {
 func (s *Store) Sync() (err error) {
 	s.segmx.RLock()
 	for _, seg := range s.segs {
+		if !atomic.CompareAndSwapUint32(&seg.dirty, 1, 0) {
+			continue
+		}
+
 		if err := seg.Sync(); err != nil {
 			s.segmx.RUnlock()
 			return err
@@ -266,12 +283,12 @@ func (s *Store) ensure(n int64) (err error) {
 
 	for i := available; i <= num; i++ {
 		path := s.base + strconv.Itoa(i)
-		file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+		seg, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
 		if err != nil {
 			return err
 		}
 
-		info, err := file.Stat()
+		info, err := seg.Stat()
 		if err != nil {
 			return err
 		}
@@ -285,12 +302,12 @@ func (s *Store) ensure(n int64) (err error) {
 
 			// If the file size if zero, it should be a new
 			// segment file. Truncate it to required size.
-			if err := file.Truncate(s.size); err != nil {
+			if err := seg.Truncate(s.size); err != nil {
 				return err
 			}
 		}
 
-		s.segs = append(s.segs, file)
+		s.segs = append(s.segs, &Segment{seg, 0})
 	}
 
 	return nil

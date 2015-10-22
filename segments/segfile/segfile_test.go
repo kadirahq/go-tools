@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	tmpdir  = "/tmp/test-segs/"
+	tmpdir  = "/tmp/test-segfile/"
 	tmpfile = tmpdir + "seg_"
 )
 

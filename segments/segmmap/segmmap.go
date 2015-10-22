@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/kadirahq/go-tools/memmap"
 	"github.com/kadirahq/go-tools/segments"
@@ -15,12 +16,12 @@ var (
 	errstop = errors.New("not an error! used to stop")
 )
 
-// LoadMMaps laods all existing segment files available
+// LoadSegs laods all existing segment files available
 // matching provided base path. The base path should contain
 // the path to the segment file and the segment file prefix.
 // example: "/path/to/segment/files/prefix_"
-func LoadMMaps(base string, size int64) (segs []*memmap.Map, err error) {
-	segs = []*memmap.Map{}
+func LoadSegs(base string, size int64) (segs []*Segment, err error) {
+	segs = []*Segment{}
 
 	for i := 0; true; i++ {
 		path := base + strconv.Itoa(i)
@@ -32,26 +33,32 @@ func LoadMMaps(base string, size int64) (segs []*memmap.Map, err error) {
 		// don't need this
 		defer file.Close()
 
-		mmap, err := memmap.MapFile(file, size)
+		seg, err := memmap.MapFile(file, size)
 		if err != nil {
 			return nil, err
 		}
 
-		if err := mmap.Lock(); err != nil {
-			go mmap.Close()
+		if err := seg.Lock(); err != nil {
+			go seg.Close()
 			return nil, err
 		}
 
-		segs = append(segs, mmap)
+		segs = append(segs, &Segment{seg, 0})
 	}
 
 	return segs, nil
 }
 
+// Segment extends memmap.Map with a dirty checking flag
+type Segment struct {
+	*memmap.Map
+	dirty uint32
+}
+
 // Store is a collection of segment files. Using a set of segment files can
 // be faster than using a single growing file. Also, it allocates faster.
 type Store struct {
-	segs  []*memmap.Map
+	segs  []*Segment
 	segmx *sync.RWMutex
 	base  string
 	size  int64
@@ -61,7 +68,7 @@ type Store struct {
 
 // New creates a collection of segment files on given path
 func New(base string, size int64) (s *Store, err error) {
-	segs, err := LoadMMaps(base, size)
+	segs, err := LoadSegs(base, size)
 	if err != nil {
 		return nil, err
 	}
@@ -172,6 +179,9 @@ func (s *Store) WriteAt(p []byte, off int64) (n int, err error) {
 		seg := s.segs[i]
 		c := copy(seg.Data[start:end], towrite)
 
+		// mark the segment as changed
+		atomic.StoreUint32(&seg.dirty, 1)
+
 		n += c
 		towrite = towrite[c:]
 		toalloc = i + 1
@@ -179,8 +189,11 @@ func (s *Store) WriteAt(p []byte, off int64) (n int, err error) {
 		return false, nil
 	}
 
-	err = segments.Bounds(s.size, off, off+sz, fn)
-	return n, err
+	if err := segments.Bounds(s.size, off, off+sz, fn); err != nil {
+		return n, err
+	}
+
+	return n, nil
 }
 
 // SliceAt implements the fs.SlicerAt interface
@@ -195,6 +208,11 @@ func (s *Store) SliceAt(sz, off int64) (p []byte, err error) {
 
 		seg := s.segs[i]
 		p = seg.Data[start:end]
+
+		// mark that the mmap may have changed (sliced data can be changed)
+		// TODO We're setting this as changed but the change is going to
+		// happen later (if it happens at all). Try to fix this problem.
+		atomic.StoreUint32(&seg.dirty, 1)
 
 		return true, nil
 	}
@@ -221,6 +239,10 @@ func (s *Store) Ensure(off int64) (err error) {
 func (s *Store) Sync() (err error) {
 	s.segmx.RLock()
 	for _, seg := range s.segs {
+		if !atomic.CompareAndSwapUint32(&seg.dirty, 1, 0) {
+			continue
+		}
+
 		if err := seg.Sync(); err != nil {
 			s.segmx.RUnlock()
 			return err
@@ -279,17 +301,17 @@ func (s *Store) ensure(n int64) (err error) {
 		// don't need this
 		defer file.Close()
 
-		mmap, err := memmap.MapFile(file, s.size)
+		seg, err := memmap.MapFile(file, s.size)
 		if err != nil {
 			return err
 		}
 
-		if err := mmap.Lock(); err != nil {
-			go mmap.Close()
+		if err := seg.Lock(); err != nil {
+			go seg.Close()
 			return err
 		}
 
-		s.segs = append(s.segs, mmap)
+		s.segs = append(s.segs, &Segment{seg, 0})
 	}
 
 	return nil
