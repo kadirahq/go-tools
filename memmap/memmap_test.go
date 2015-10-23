@@ -130,3 +130,35 @@ func TestData(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func BenchSync(b *testing.B, size int64) {
+	if err := os.RemoveAll(tmpfile); err != nil {
+		b.Fatal(err)
+	}
+
+	mmap, err := New(tmpfile, size)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	if err := mmap.Lock(); err != nil {
+		b.Fatal(err)
+	}
+
+	values := make([]byte, 1000)
+
+	for i := 0; i < 1000; i++ {
+		values[i] = byte(i % 256)
+	}
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		copy(mmap.Data, values)
+		mmap.Sync()
+	}
+}
+
+func BenchmarkSyncSz1MB(b *testing.B)   { BenchSync(b, 1*1024*1024) }
+func BenchmarkSyncSz20MB(b *testing.B)  { BenchSync(b, 20*1024*1024) }
+func BenchmarkSyncSz100MB(b *testing.B) { BenchSync(b, 100*1024*1024) }
